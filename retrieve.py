@@ -1,0 +1,114 @@
+# recall. — Retrieval Layer
+# Hybrid scoring: semantic + recency + entity overlap
+
+import re
+import numpy as np
+from datetime import datetime
+from typing import Optional
+
+from store import Memory, SQLiteStore
+from embed import get_embedder
+
+# ─── Default weights ──────────────────────────────────────────────────────────
+
+DEFAULT_WEIGHTS = {"semantic": 0.5, "recency": 0.3, "entity": 0.2}
+RECENCY_HALF_LIFE_DAYS = 14
+TOP_K = 10
+
+# ─── Entity extraction ────────────────────────────────────────────────────────
+
+STOP_WORDS = {
+    "the","a","an","is","are","was","were","it","this","that",
+    "to","of","in","for","on","with","at","by","from","as",
+    "and","or","but","not","be","been","being","have","has",
+    "had","do","does","did","will","would","can","could",
+    "may","might","shall","should","about","into","through",
+    "during","before","after","above","below","between",
+    "out","off","over","under","again","further","then",
+    "once","here","there","when","where","why","how",
+    "all","each","every","both","few","more","most",
+    "other","some","such","no","nor","only","own",
+    "same","so","than","too","very","just","also","now",
+    "的","是","了","在","有","我","不","這","那","也",
+    "和","就","你","都","要","會","可","以","為","上",
+}
+
+
+def extract_entities(text: str) -> list[str]:
+    text_lower = text.lower()
+    capitalized = re.findall(r'\b[A-Z][a-zA-Z0-9+#_-]{1,}\b', text)
+    tech_terms = re.findall(r'\b[a-z]+[A-Z][a-zA-Z0-9]*\b', text)
+    tech_terms += re.findall(r'\b[a-z]+_[a-z]+\b', text)
+    tech_terms += re.findall(r'\b[A-Za-z]+\d+\.\d+\b', text)
+    words = re.findall(r'\b[a-zA-Z]{3,}\b', text_lower)
+    words = [w for w in words if w not in STOP_WORDS]
+    all_terms = set(w.lower() for w in capitalized + tech_terms + words)
+    return sorted(all_terms)[:20]
+
+
+# ─── Scoring functions ────────────────────────────────────────────────────────
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    a, b = np.array(a), np.array(b)
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
+
+
+def recency_score(timestamp: datetime) -> float:
+    days_ago = (datetime.utcnow() - timestamp).days
+    return 2 ** (-days_ago / RECENCY_HALF_LIFE_DAYS)
+
+
+def entity_overlap_score(query_entities: set, memory_entities: set) -> float:
+    if not query_entities or not memory_entities:
+        return 0.0
+    intersection = query_entities & memory_entities
+    return len(intersection) / max(len(query_entities), len(memory_entities))
+
+
+# ─── Retrieval ────────────────────────────────────────────────────────────────
+
+def retrieve_relevant(
+    query: str,
+    store: SQLiteStore,
+    k: int = TOP_K,
+    weights: Optional[dict] = None,
+    tag_filter: Optional[str] = None,
+) -> list[Memory]:
+    if weights is None:
+        weights = DEFAULT_WEIGHTS
+
+    query_embedding = get_embedder().encode(query, normalize_embeddings=True).tolist()
+    query_entities = set(extract_entities(query))
+
+    all_memories = store.get_all()
+    if not all_memories:
+        return []
+
+    if tag_filter:
+        all_memories = [m for m in all_memories if m.tag == tag_filter]
+
+    scored = []
+    for mem in all_memories:
+        sem = cosine_similarity(query_embedding, mem.embedding) if mem.embedding else 0.0
+        rec = recency_score(mem.timestamp)
+        ent = entity_overlap_score(query_entities, set(mem.entities))
+        hybrid = weights["semantic"] * sem + weights["recency"] * rec + weights["entity"] * ent
+        scored.append((hybrid, mem))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [mem for _, mem in scored[:k]]
+
+
+def pure_vector_search(
+    query: str,
+    store: SQLiteStore,
+    k: int = TOP_K,
+) -> list[Memory]:
+    query_embedding = get_embedder().encode(query, normalize_embeddings=True).tolist()
+    all_memories = store.get_all()
+    scored = []
+    for mem in all_memories:
+        sem = cosine_similarity(query_embedding, mem.embedding) if mem.embedding else 0.0
+        scored.append((sem, mem))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [mem for _, mem in scored[:k]]
