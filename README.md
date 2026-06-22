@@ -47,8 +47,13 @@ EMBED_PORT = 1234  # change to match your LM Studio port
 
 ### If LM Studio is down
 
-`mcp_recall_recall` calls will fail with an embedding error.
-The rest of your agent (Honcho, built-in memory, session_search) is unaffected.
+Graceful degradation kicks in automatically:
+
+- **retrieval** (`mcp_recall_recall` / `recall query`) falls back to keyword + FTS5 search — no crash, just no ANN path
+- **storage** (`mcp_recall_store_memory` / `recall add`) saves memories without embeddings — still findable via keywords
+- **CLI** (`recall add/stats/delete`) unaffected — doesn't use embeddings at all
+
+No error, no crash, no data loss. Just slightly less precise results.
 
 ---
 
@@ -69,8 +74,9 @@ Or via MCP server for Antigravity IDE / Hermes Agent / Gemini CLI:
 # mcp_servers:
 #   recall:
 #     command: "python"
-#     args: ["path/to/src/recall/recall_mcp.py"]
+#     args: ["-m", "recall.recall_mcp"]
 #     timeout: 30
+#     cwd: "/path/to/recall-memory"
 ```
 
 ## Architecture
@@ -126,7 +132,6 @@ recall stats
 ```bash
 recall add "content"           # Store a memory
 recall query "question"        # Retrieve relevant memories
-recall pure "question"         # Pure vector (baseline comparison)
 recall stats                   # Store statistics
 recall delete <id>             # Remove a memory
 ```

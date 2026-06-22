@@ -7,9 +7,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from datetime import datetime, timezone
 from unittest.mock import patch
+import pytest
 from recall.store import Memory, SQLiteStore, extract_keywords
-from recall.embed import embed
-from recall.retrieve import retrieve_relevant, expand_query
+from recall.embed import embed, is_loaded
+from recall.retrieve import retrieve_relevant, expand_query, _rank_by_embedding
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -127,13 +128,13 @@ def test_expand_query_unknown_terms():
 
 # ─── Embedding ────────────────────────────────────────────────────────────────
 
+@pytest.mark.skipif(not is_loaded(), reason="LM Studio not running on port 1234")
 def test_embed():
     """Test embedding function returns expected dimension."""
     vec = embed("test query")
-    if vec is not None:
-        assert len(vec) == 768
-        assert all(isinstance(v, float) for v in vec)
-    # If LM Studio is unreachable, embed() returns None — test passes gracefully
+    assert vec is not None
+    assert len(vec) == 768
+    assert all(isinstance(v, float) for v in vec)
 
 
 # ─── Retrieval (mock-based, no LM Studio needed) ──────────────────────────────
@@ -224,3 +225,20 @@ def test_retrieve_relevant_multiple_results(mock_embed):
         assert len(pg_results) >= 1
     finally:
         _cleanup(db_path)
+
+
+# ─── Fallback ranking ─────────────────────────────────────────────────────────
+
+def test_rank_by_embedding_empty_scored():
+    """_rank_by_embedding returns latest memories when no embeddings exist."""
+    mems = [
+        Memory(content="A", timestamp=datetime.now(timezone.utc)),
+        Memory(content="B", timestamp=datetime.now(timezone.utc)),
+    ]
+    result = _rank_by_embedding(mems, None, k=2)
+    assert len(result) == 2  # fallback: no query_embedding
+    assert result[0].content == "A"
+
+    result2 = _rank_by_embedding(mems, [0.0] * 768, k=2)
+    assert len(result2) == 2  # fallback: all memories lack embedding vector
+    assert result2[0].content == "A"

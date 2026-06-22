@@ -86,7 +86,7 @@ def retrieve_relevant(
     """
     # Try to embed the expanded query; if unavailable, skip ANN paths
     expanded = expand_query(query, max_terms=20)
-    query_embedding = embed(expanded) if expand_query(query, max_terms=20) else None
+    query_embedding = embed(expanded) if expanded else None
     embed_available = query_embedding is not None
 
     if not embed_available:
@@ -102,9 +102,7 @@ def retrieve_relevant(
             path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + rank)
 
     # Path K: Keyword SQL JOIN (multi-hop)
-    seed_ids = list(set(
-        mid for mid in path_results.keys()
-    )) if path_results else []
+    seed_ids = list(path_results.keys()) if path_results else []
     kw_ids = set(seed_ids)
     kw_rank = 0
     for hop in range(hops):
@@ -170,5 +168,7 @@ def _rank_by_embedding(
             a, b = np.array(query_embedding), np.array(mem.embedding)
             sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
             scored.append((sim, mem))
+    if not scored:
+        return memories[:k]  # fallback: no embeddings to rank by, return latest
     scored.sort(key=lambda x: x[0], reverse=True)
     return [mem for _, mem in scored[:k]]
