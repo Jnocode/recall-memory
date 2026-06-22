@@ -1,0 +1,2 @@
+[console_scripts]
+recall = recall.cli:app

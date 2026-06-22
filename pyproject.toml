@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recall-memory"
+version = "0.1.0"
+description = "Better contextual retrieval for AI agents. Three-path RRF retrieval in SQLite."
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+dependencies = [
+    "sentence-transformers>=3.0.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+mcp = []
+
+[project.urls]
+homepage = "https://github.com/Jnocode/recall-memory"
+repository = "https://github.com/Jnocode/recall-memory"
+
+[project.scripts]
+recall = "recall.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/recall/__init__.py
+src/recall/cli.py
+src/recall/embed.py
+src/recall/recall_mcp.py
+src/recall/retrieve.py
+src/recall/store.py
+src/recall_memory.egg-info/PKG-INFO
+src/recall_memory.egg-info/SOURCES.txt
+src/recall_memory.egg-info/dependency_links.txt
+src/recall_memory.egg-info/entry_points.txt
+src/recall_memory.egg-info/requires.txt
+src/recall_memory.egg-info/top_level.txt

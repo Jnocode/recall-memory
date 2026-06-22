@@ -1,0 +1,4 @@
+sentence-transformers>=3.0.0
+numpy>=1.24
+
+[mcp]
