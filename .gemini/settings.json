@@ -3,7 +3,7 @@
     "recall": {
       "command": "python",
       "args": [
-        "D:\\Workspace\\03_Dev_Projects\\recall\\recall_mcp.py"
+        "D:\\Workspace\\03_Dev_Projects\\recall\\src\\recall\\recall_mcp.py"
       ]
     }
   }
