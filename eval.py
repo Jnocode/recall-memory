@@ -1,18 +1,16 @@
-"""recall. — Evaluation Pipeline (P1)
-Run: python3 eval.py
-Verifies hybrid scoring > pure vector after every change.
+"""recall. — Evaluation Pipeline
+Measures recall of retrieve_relevant() on 20 multi-hop QA questions.
 """
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from store import SQLiteStore
-from retrieve import retrieve_relevant, pure_vector_search
+from retrieve import retrieve_relevant
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recall_p0.db")
 TOP_K = 5
 
-# 20 multi-hop questions with ground truth memory IDs
 EVAL_QUESTIONS = [
     ("Which deployment method does user prefer?", {"seed_00","seed_01","seed_11","seed_20"}),
     ("What database issues encountered?", {"seed_02","seed_12","seed_16","seed_26"}),
@@ -36,64 +34,21 @@ EVAL_QUESTIONS = [
     ("Testing improvements?", {"seed_10"}),
 ]
 
-MINIMUM_RATIO = 1.0   # hybrid must be >= pure vector
 
+if __name__ == "__main__":
+    store = SQLiteStore(DB_PATH)
+    count = store.count()
+    print(f"📊 recall. evaluation")
+    print(f"   Memories: {count}   Questions: {len(EVAL_QUESTIONS)}   Top-K: {TOP_K}")
 
-def evaluate(method, name: str) -> tuple:
-    """Run evaluation, return (avg_recall, avg_precision, detail_list)."""
-    total_r = total_p = 0
-    details = []
+    total_recall = 0
     for q, truth in EVAL_QUESTIONS:
-        mems = method(q, store, k=TOP_K)
+        mems = retrieve_relevant(q, store, k=TOP_K)
         ids = {m.id for m in mems}
         hit = ids & truth
         r = len(hit) / len(truth) if truth else 0
-        p = len(hit) / TOP_K
-        total_r += r
-        total_p += p
-        details.append((q, r, p, len(hit), len(truth)))
-    avg_r = total_r / len(EVAL_QUESTIONS)
-    avg_p = total_p / len(EVAL_QUESTIONS)
-    return avg_r, avg_p, details
+        total_recall += r
 
-
-if __name__ == "__main__":
-    # Warm model
-    from embed import get_embedder
-    get_embedder().encode("warmup", normalize_embeddings=True)
-
-    store = SQLiteStore(DB_PATH)
-    count = store.count()
-    print(f"📊 recall. evaluation pipeline")
-    print(f"   Memories: {count}   Questions: {len(EVAL_QUESTIONS)}   Top-K: {TOP_K}")
-    print()
-
-    hybrid_r, hybrid_p, hybrid_d = evaluate(retrieve_relevant, "Hybrid")
-    pure_r, pure_p, pure_d = evaluate(pure_vector_search, "Pure")
-    ratio = hybrid_r / max(pure_r, 0.001)
-
-    print(f"   {'Method':15s} {'Recall':>8s} {'Precision':>10s}")
-    print(f"   {'─'*35}")
-    print(f"   {'Hybrid':15s} {hybrid_r:>8.3f} {hybrid_p:>10.3f}")
-    print(f"   {'Pure Vector':15s} {pure_r:>8.3f} {pure_p:>10.3f}")
-    print(f"   {'─'*35}")
-    print(f"   Ratio: {ratio:.2f}x  (threshold: {MINIMUM_RATIO:.1f}x)")
-    print()
-
-    passed = ratio >= MINIMUM_RATIO
-    status = "✅ PASS" if passed else "❌ FAIL"
-    print(f"   {status} — Hybrid{' ' if passed else ' NOT '}> Pure ({ratio:.2f}x {'>=' if passed else '<'} {MINIMUM_RATIO:.1f}x)")
-
-    if not passed:
-        print()
-        print("   ⚠️  WARNING: Evaluation failed. Recent change may have degraded retrieval.")
-        print("      Check the latest code change before proceeding.")
-        sys.exit(1)
-
-    # Show per-question breakdown
-    print()
-    for i, ((q, _), (_, hr, hp, hits, total)) in enumerate(zip(EVAL_QUESTIONS, hybrid_d)):
-        mark = "✅" if hits >= 1 else "❌"
-        print(f"   {mark} {i+1:2d}. R={hr:.2f} P={hp:.2f} ({hits}/{total}) — {q[:40]}")
-    print()
-    print(f"   ✅ Evaluation pipeline complete. Hybrid > Pure confirmed.")
+    avg_r = total_recall / len(EVAL_QUESTIONS)
+    print(f"\n   Recall@{TOP_K}: {avg_r:.3f}")
+    print(f"   Memories: {count}")

@@ -23,7 +23,7 @@ class Memory:
 
 
 class SQLiteStore:
-    def __init__(self, db_path: str, vec_dim: int = 384):
+    def __init__(self, db_path: str, vec_dim: int = 768):
         self.db_path = db_path
         self.vec_dim = vec_dim
         self._init_db()

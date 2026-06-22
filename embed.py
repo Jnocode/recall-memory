@@ -1,14 +1,15 @@
 # recall. — Embedding Layer
-# Uses Nomic Embed v1.5 via LM Studio (port 1234)
+# Uses nomic-embed-text-v1.5 via LM Studio (port 1234)
 
 import json
 import urllib.request
-from typing import Optional
+
+_MODEL = "nomic-embed-text-v1.5"
 
 
 def embed(text: str) -> list[float]:
     body = json.dumps({
-        "model": "nomic-embed-text-v1.5",
+        "model": _MODEL,
         "input": [text],
         "encoding_format": "float"
     }).encode()
@@ -24,7 +25,7 @@ def embed(text: str) -> list[float]:
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
     body = json.dumps({
-        "model": "nomic-embed-text-v1.5",
+        "model": _MODEL,
         "input": texts,
         "encoding_format": "float"
     }).encode()
@@ -40,7 +41,6 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
 
 
 def is_loaded() -> bool:
-    """LM Studio is always loaded. Check if endpoint responds."""
     try:
         req = urllib.request.Request("http://127.0.0.1:1234/v1/models")
         resp = urllib.request.urlopen(req, timeout=2)
