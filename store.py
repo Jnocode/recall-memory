@@ -98,6 +98,16 @@ class SQLiteStore:
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_kw ON keywords(keyword)")
 
+        # FTS5 full-text search table (from AIngram)
+        try:
+            conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                    content, id UNINDEXED, tokenize='porter unicode61'
+                )
+            """)
+        except Exception:
+            pass  # FTS5 not available in this SQLite build
+
         if self.vec_available:
             try:
                 conn.execute(f"""
@@ -144,13 +154,20 @@ class SQLiteStore:
             for kw in extract_keywords(memory.content):
                 conn.execute("INSERT OR REPLACE INTO keywords VALUES (?,?)",
                              (kw.lower(), memory.id))
+            
+            # FTS5 index
+            try:
+                conn.execute("INSERT OR REPLACE INTO memories_fts VALUES (?, ?)",
+                             (memory.content, memory.id))
+            except Exception:
+                pass
+            
             conn.commit()
         finally:
             conn.close()
         return memory.id
 
     def search_by_keywords(self, keywords: list[str], limit: int = 20) -> list[str]:
-        """Path A: Find memory IDs that match any of the given keywords."""
         if not keywords:
             return []
         ph = ",".join("?" for _ in keywords)
@@ -160,6 +177,22 @@ class SQLiteStore:
                 keywords + [limit]
             ).fetchall()
         return [r[0] for r in rows]
+
+    def fts_search(self, query: str, limit: int = 20) -> list[str]:
+            """FTS5 full-text search (from AIngram). Returns memory IDs."""
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    # Sanitize FTS query
+                    safe = " ".join(f'"{w}"' for w in query.split() if len(w) > 2)
+                    if not safe:
+                        return []
+                    rows = conn.execute(
+                        "SELECT id FROM memories_fts WHERE memories_fts MATCH ? LIMIT ?",
+                        (safe, limit)
+                    ).fetchall()
+                return [r[0] for r in rows]
+            except Exception:
+                return []
 
     def get_related_keywords(self, memory_ids: list[str], limit: int = 20) -> list[str]:
         """Get keywords that appear in the given memories."""
@@ -220,6 +253,10 @@ class SQLiteStore:
     def delete(self, memory_id: str) -> bool:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("DELETE FROM keywords WHERE memory_id=?", (memory_id,))
+            try:
+                conn.execute("DELETE FROM memories_fts WHERE id=?", (memory_id,))
+            except Exception:
+                pass
             cur = conn.execute("DELETE FROM memories WHERE id=?", (memory_id,))
         return cur.rowcount > 0
 
@@ -238,6 +275,10 @@ class SQLiteStore:
         try:
             conn.execute("DELETE FROM keywords")
             conn.execute("DELETE FROM memories")
+            try:
+                conn.execute("DELETE FROM memories_fts")
+            except Exception:
+                pass
             if self.vec_available:
                 conn.execute("DELETE FROM vec_embeddings")
             conn.commit()

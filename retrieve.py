@@ -72,72 +72,75 @@ def retrieve_relevant(
     store: SQLiteStore,
     k: int = TOP_K,
     tag_filter: Optional[str] = None,
-    weights: Optional[dict] = None,
     hops: int = 2,
 ) -> list[Memory]:
-    if weights is None:
-        weights = {"path_a": 0.4, "path_b": 0.6}
-
     query_embedding = embed(expand_query(query, max_terms=20))
 
-    # Path B: Direct vector search
-    vec_ids = set(ann_search(store, query_embedding, k=k * 3))
+    # Three retrieval paths (fused via RRF)
+    path_results = {}
 
-    # Path A: Multi-hop keyword SQL JOIN (SAG-style)
-    # Step 1: Extract keywords from query directly
-    query_keywords = list(set(expand_query(query, max_terms=20).split()[:10]))
-    query_kw_ids = set(store.search_by_keywords(query_keywords, limit=k * 3))
+    # Path V: Vector search (ANN)
+    vec_ids = ann_search(store, query_embedding, k=k * 3)
+    for rank, mid in enumerate(vec_ids):
+        path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + rank)
 
-    # Step 2: Also get keywords from vector-matched memories
-    seed_ids = list(vec_ids | query_kw_ids)
+    # Path K: Keyword SQL JOIN (multi-hop)
+    seed_ids = list(set(vec_ids))
     kw_ids = set(seed_ids)
-
+    kw_rank = 0
     for hop in range(hops):
-        related_keywords = store.get_related_keywords(seed_ids, limit=15) if seed_ids else []
-        new_ids = set(store.search_by_keywords(related_keywords, limit=k * 3))
+        rkws = store.get_related_keywords(seed_ids, limit=15) if seed_ids else []
+        new_ids = set(store.search_by_keywords(rkws, limit=k * 3))
         added = new_ids - kw_ids
         kw_ids.update(new_ids)
         seed_ids = list(added)
+        for mid in added:
+            path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + kw_rank)
+            kw_rank += 1
         if not added or hop >= hops - 1:
             break
 
-    # Weighted fusion
-    combined_ids = {}
-    for mid in vec_ids:
-        combined_ids[mid] = weights["path_b"]
-    for mid in kw_ids:
-        current = combined_ids.get(mid, 0.0)
-        combined_ids[mid] = max(current, weights["path_a"])
-    for mid in vec_ids & kw_ids:
-        combined_ids[mid] = weights["path_a"] + weights["path_b"]
+    # Path F: FTS5 full-text search (from AIngram)
+    fts_ids = store.fts_search(query, limit=k * 3)
+    for rank, mid in enumerate(fts_ids):
+        path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + rank)
 
+    # Query keywords also contribute to keyword path
+    query_kws = list(set(expand_query(query, max_terms=20).split()[:10]))
+    qkw_ids = store.search_by_keywords(query_kws, limit=k * 3)
+    for rank, mid in enumerate(qkw_ids):
+        path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + rank)
+
+    # Filter and fetch
     if tag_filter:
-        combined_ids = {mid: w for mid, w in combined_ids.items()
+        path_results = {mid: sc for mid, sc in path_results.items()
                         if (mem := store.get(mid)) and mem.tag == tag_filter}
 
-    if not combined_ids:
+    if not path_results:
         all_mems = store.get_all()
         if tag_filter:
             all_mems = [m for m in all_mems if m.tag == tag_filter]
     else:
-        all_mems = []
-        for mid in combined_ids:
+        # Sort by RRF score, then by cosine similarity for tiebreaking
+        scored = []
+        for mid, rrf_score in path_results.items():
             mem = store.get(mid)
-            if mem:
-                all_mems.append(mem)
+            if mem and mem.embedding:
+                a, b = np.array(query_embedding), np.array(mem.embedding)
+                sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
+                scored.append((rrf_score * 0.7 + sim * 0.3, mem))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [mem for _, mem in scored[:k]]
 
     if not all_mems:
         return []
 
-    # Rank by cosine similarity × path weight
     scored = []
     for mem in all_mems:
         if mem.embedding:
             a, b = np.array(query_embedding), np.array(mem.embedding)
             sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
-            weight = combined_ids.get(mem.id, 0.5)
-            scored.append((sim * weight, mem))
-
+            scored.append((sim, mem))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [mem for _, mem in scored[:k]]
 
