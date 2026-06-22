@@ -1,6 +1,7 @@
 recall_p0.db
 *.db
 __pycache__/
+.pytest_cache/
 .DS_Store
 *.db-shm
 *.db-wal
