@@ -67,16 +67,43 @@ recall add "User prefers docker-compose for local dev"
 recall query "How to deploy?"
 ```
 
-Or via MCP server for Antigravity IDE / Hermes Agent / Gemini CLI:
+Or via MCP server for Hermes Agent / Antigravity IDE / Gemini CLI:
 
+### Hermes (local install)
+
+If recall is installed in the same Python env as Hermes:
+```yaml
+# ~/.hermes/config.yaml
+mcp_servers:
+  recall:
+    command: "python"
+    args: ["-m", "recall.recall_mcp"]
+    timeout: 30
+    cwd: "/path/to/recall-memory"   # optional, needed for DB path resolution
+```
+
+### Hermes (Docker)
+
+```yaml
+# ~/.hermes/config.yaml
+mcp_servers:
+  recall:
+    command: docker
+    args:
+      - run
+      - -i
+      - --rm
+      - --network=host
+      - -v
+      - recall-data:/data
+      - recall-memory:latest
+    timeout: 30
+```
+
+Build the image first:
 ```bash
-# Hermes: add to ~/.hermes/config.yaml
-# mcp_servers:
-#   recall:
-#     command: "python"
-#     args: ["-m", "recall.recall_mcp"]
-#     timeout: 30
-#     cwd: "/path/to/recall-memory"
+cd /path/to/recall-memory
+docker compose build
 ```
 
 ## Architecture

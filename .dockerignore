@@ -1,0 +1,9 @@
+recall_p0.db
+*.db
+__pycache__/
+.pytest_cache/
+.git/
+.github/
+tests/
+.DS_Store
+*.md

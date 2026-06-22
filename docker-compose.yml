@@ -1,0 +1,40 @@
+# recall. — Docker Compose
+# Builds and runs recall-memory MCP server.
+# LM Studio on host:1234 is accessed via host.docker.internal.
+#
+# Usage:
+#   docker compose build
+#   docker compose up -d
+#   docker compose logs -f
+#
+# Hermes MCP config (add to ~/.hermes/config.yaml):
+#   mcp_servers:
+#     recall:
+#       command: docker
+#       args:
+#         - run
+#         - -i
+#         - --rm
+#         - --network=host
+#         - -v
+#         - recall-data:/data
+#         - recall-memory:latest
+#       timeout: 30
+
+services:
+  recall:
+    build: .
+    image: recall-memory:latest
+    container_name: recall-mcp
+    network_mode: "host"
+    environment:
+      - EMBED_BASE_URL=http://host.docker.internal:1234
+      - DATA_DIR=/data
+    volumes:
+      - recall-data:/data
+    stdin_open: true   # -i (interactive, for MCP stdio)
+    tty: false
+    restart: unless-stopped
+
+volumes:
+  recall-data:

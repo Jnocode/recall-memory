@@ -4,13 +4,21 @@
 
 import json
 import urllib.request
+import os
 
-EMBED_PORT = 1234
+EMBED_PORT = int(os.environ.get("EMBED_PORT", "1234"))
 """Port where LM Studio serves the embedding model.
-Change this if your LM Studio uses a different port."""
+Override with EMBED_PORT env var."""
 
-EMBED_MODEL = "nomic-embed-text-v1.5"
-EMBED_URL = f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings"
+EMBED_BASE_URL = os.environ.get(
+    "EMBED_BASE_URL",
+    f"http://127.0.0.1:{EMBED_PORT}"
+)
+"""Base URL for OpenAI-compatible embedding API.
+Override with EMBED_BASE_URL env var (e.g. http://host.docker.internal:1234)."""
+
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text-v1.5")
+EMBED_URL = f"{EMBED_BASE_URL}/v1/embeddings"
 EMBED_TIMEOUT = 15  # seconds per request
 
 _EMBEDDING_CACHE: dict[str, list[float]] = {}
