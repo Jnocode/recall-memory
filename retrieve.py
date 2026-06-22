@@ -11,7 +11,7 @@ from embed import get_embedder
 
 # ─── Default weights ──────────────────────────────────────────────────────────
 
-DEFAULT_WEIGHTS = {"semantic": 0.5, "recency": 0.3, "entity": 0.2}
+DEFAULT_WEIGHTS = {"semantic": 0.6, "recency": 0.0, "entity": 0.4}
 RECENCY_HALF_LIFE_DAYS = 14
 TOP_K = 10
 

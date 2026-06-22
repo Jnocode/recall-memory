@@ -1,33 +1,49 @@
 # recall. — Embedding Layer
-# Cached sentence-transformers wrapper with lazy loading
+# Uses Nomic Embed v1.5 via LM Studio (port 1234)
 
+import json
+import urllib.request
 from typing import Optional
-from sentence_transformers import SentenceTransformer
-
-_model: Optional[SentenceTransformer] = None
-_MODEL_NAME = "all-MiniLM-L6-v2"
-_LOADED: bool = False
-
-
-def get_embedder() -> SentenceTransformer:
-    global _model, _LOADED
-    if _model is None:
-        import sys
-        if not _LOADED:
-            print("⏳ Loading embedding model (~10s first time)...", file=sys.stderr)
-            sys.stderr.flush()
-            _LOADED = True
-        _model = SentenceTransformer(_MODEL_NAME)
-    return _model
 
 
 def embed(text: str) -> list[float]:
-    return get_embedder().encode(text, normalize_embeddings=True).tolist()
+    body = json.dumps({
+        "model": "nomic-embed-text-v1.5",
+        "input": [text],
+        "encoding_format": "float"
+    }).encode()
+    req = urllib.request.Request(
+        "http://127.0.0.1:1234/v1/embeddings",
+        data=body,
+        headers={"Content-Type": "application/json"}
+    )
+    resp = urllib.request.urlopen(req, timeout=15)
+    data = json.loads(resp.read())
+    return data["data"][0]["embedding"]
 
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
-    return get_embedder().encode(texts, normalize_embeddings=True).tolist()
+    body = json.dumps({
+        "model": "nomic-embed-text-v1.5",
+        "input": texts,
+        "encoding_format": "float"
+    }).encode()
+    req = urllib.request.Request(
+        "http://127.0.0.1:1234/v1/embeddings",
+        data=body,
+        headers={"Content-Type": "application/json"}
+    )
+    resp = urllib.request.urlopen(req, timeout=60)
+    data = json.loads(resp.read())
+    data["data"].sort(key=lambda x: x["index"])
+    return [d["embedding"] for d in data["data"]]
 
 
 def is_loaded() -> bool:
-    return _model is not None
+    """LM Studio is always loaded. Check if endpoint responds."""
+    try:
+        req = urllib.request.Request("http://127.0.0.1:1234/v1/models")
+        resp = urllib.request.urlopen(req, timeout=2)
+        return True
+    except Exception:
+        return False

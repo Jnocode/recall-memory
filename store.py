@@ -23,8 +23,9 @@ class Memory:
 
 
 class SQLiteStore:
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, vec_dim: int = 384):
         self.db_path = db_path
+        self.vec_dim = vec_dim
         self._init_db()
 
     def _init_db(self):
@@ -50,13 +51,13 @@ class SQLiteStore:
             )
         """)
 
-        # Vector virtual table for ANN search
+        # Vector virtual table with configurable dimension
         if self.vec_available:
             try:
-                conn.execute("""
+                conn.execute(f"""
                     CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
                         id TEXT PRIMARY KEY,
-                        embedding float[384] distance_metric=cosine
+                        embedding float[{self.vec_dim}] distance_metric=cosine
                     )
                 """)
             except Exception:
