@@ -29,21 +29,48 @@ STOP_WORDS = {
     "all","each","every","both","few","more","most",
     "other","some","such","no","nor","only","own",
     "same","so","than","too","very","just","also","now",
+    "get","use","set","put","make","take","come","go","see",
+    "know","think","want","give","tell","ask","show","try",
+    "leave","call","keep","let","begin","seem","help","turn",
     "的","是","了","在","有","我","不","這","那","也",
     "和","就","你","都","要","會","可","以","為","上",
+    "what","which","who","whom","whose","where","why","how",
 }
 
 
 def extract_entities(text: str) -> list[str]:
+    """Extract technical terms and meaningful nouns from text.
+    
+    Priority: multi-word terms > capitalized proper nouns > single words.
+    """
     text_lower = text.lower()
-    capitalized = re.findall(r'\b[A-Z][a-zA-Z0-9+#_-]{1,}\b', text)
-    tech_terms = re.findall(r'\b[a-z]+[A-Z][a-zA-Z0-9]*\b', text)
-    tech_terms += re.findall(r'\b[a-z]+_[a-z]+\b', text)
-    tech_terms += re.findall(r'\b[A-Za-z]+\d+\.\d+\b', text)
-    words = re.findall(r'\b[a-zA-Z]{3,}\b', text_lower)
+    
+    # Multi-word technical terms (docker-compose, multi-stage, etc.)
+    multi_word = re.findall(r'\b[a-zA-Z][a-zA-Z0-9]+[-_][a-zA-Z0-9][-a-zA-Z0-9]*\b', text)
+    
+    # Capitalized words (proper nouns, technologies: Docker, FastAPI, React)
+    capitalized = re.findall(r'\b[A-Z][a-zA-Z0-9+#_-]{2,}\b', text)
+    
+    # Versions (Python 3.12, v2, 0.8.0)
+    versions = re.findall(r'\b[A-Za-z]+\s*\d+\.\d+[\w.]*\b', text)
+    
+    # CamelCase terms (PostgreSQL, FastAPI, SQLAlchemy)
+    camel_case = re.findall(r'\b[A-Z][a-z]+[A-Z][a-zA-Z0-9]*\b', text)
+    
+    # Regular words (min 4 chars, not stop words)
+    words = re.findall(r'\b[a-zA-Z]{4,}\b', text_lower)
     words = [w for w in words if w not in STOP_WORDS]
-    all_terms = set(w.lower() for w in capitalized + tech_terms + words)
-    return sorted(all_terms)[:20]
+    
+    # Combine, deduplicate, lowercase, filter stop words
+    all_terms = set()
+    for term in multi_word + capitalized + versions + camel_case:
+        t = term.lower().rstrip('s')
+        if t not in STOP_WORDS:
+            all_terms.add(t)
+    for w in words:
+        all_terms.add(w)
+    
+    return sorted(all_terms)[:15]
 
 
 # ─── Scoring functions ────────────────────────────────────────────────────────

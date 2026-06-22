@@ -4,6 +4,7 @@
 import sqlite3
 import json
 import hashlib
+import numpy as np
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import Optional
@@ -27,34 +28,74 @@ class SQLiteStore:
         self._init_db()
 
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS memories (
-                    id TEXT PRIMARY KEY,
-                    content TEXT NOT NULL,
-                    entities TEXT DEFAULT '[]',
-                    timestamp TEXT NOT NULL,
-                    embedding BLOB,
-                    access_count INTEGER DEFAULT 0,
-                    session_id TEXT DEFAULT '',
-                    tag TEXT DEFAULT 'episodic'
-                )
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON memories(timestamp)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_tag ON memories(tag)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON memories(session_id)")
+        conn = sqlite3.connect(self.db_path)
+        conn.enable_load_extension(True)
+        try:
+            import sqlite_vec
+            sqlite_vec.load(conn)
+            self.vec_available = True
+        except Exception:
+            self.vec_available = False
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                entities TEXT DEFAULT '[]',
+                timestamp TEXT NOT NULL,
+                embedding BLOB,
+                access_count INTEGER DEFAULT 0,
+                session_id TEXT DEFAULT '',
+                tag TEXT DEFAULT 'episodic'
+            )
+        """)
+
+        # Vector virtual table for ANN search
+        if self.vec_available:
+            try:
+                conn.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
+                        id TEXT PRIMARY KEY,
+                        embedding float[384] distance_metric=cosine
+                    )
+                """)
+            except Exception:
+                self.vec_available = False
+
+        for idx in ["idx_ts ON memories(timestamp)",
+                     "idx_tag ON memories(tag)",
+                     "idx_session ON memories(session_id)"]:
+            try:
+                conn.execute(f"CREATE INDEX IF NOT EXISTS {idx}")
+            except Exception:
+                pass
+        conn.close()
 
     def add(self, memory: Memory) -> str:
         if not memory.id:
             raw = memory.content + str(memory.timestamp)
             memory.id = hashlib.md5(raw.encode()).hexdigest()[:12]
-        with sqlite3.connect(self.db_path) as conn:
+        conn = sqlite3.connect(self.db_path)
+        conn.enable_load_extension(True)
+        if self.vec_available:
+            import sqlite_vec
+            sqlite_vec.load(conn)
+        try:
             conn.execute(
                 "INSERT OR REPLACE INTO memories VALUES (?,?,?,?,?,?,?,?)",
                 (memory.id, memory.content, json.dumps(memory.entities),
                  memory.timestamp.isoformat(), json.dumps(memory.embedding),
                  memory.access_count, memory.session_id, memory.tag)
             )
+            if self.vec_available and memory.embedding:
+                vec_bytes = np.array(memory.embedding, dtype=np.float32).tobytes()
+                conn.execute(
+                    "INSERT OR REPLACE INTO vec_embeddings(id, embedding) VALUES (?, ?)",
+                    (memory.id, vec_bytes)
+                )
+            conn.commit()
+        finally:
+            conn.close()
         return memory.id
 
     def get(self, memory_id: str) -> Optional[Memory]:
@@ -111,9 +152,20 @@ class SQLiteStore:
                 return conn.execute("SELECT COUNT(*) FROM memories WHERE tag=?", (tag,)).fetchone()[0]
             return conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
 
+
     def clear(self):
-        with sqlite3.connect(self.db_path) as conn:
+        conn = sqlite3.connect(self.db_path)
+        conn.enable_load_extension(True)
+        if self.vec_available:
+            import sqlite_vec
+            sqlite_vec.load(conn)
+        try:
             conn.execute("DELETE FROM memories")
+            if self.vec_available:
+                conn.execute("DELETE FROM vec_embeddings")
+            conn.commit()
+        finally:
+            conn.close()
 
     def _row_to_mem(self, row) -> Memory:
         return Memory(
