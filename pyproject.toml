@@ -3,8 +3,8 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "recall-memory"
-version = "0.1.0"
+name = "recall-sqlite"
+version = "0.2.0"
 description = "Better contextual retrieval for AI agents. Three-path RRF retrieval in SQLite."
 readme = "README.md"
 license = {text = "Apache-2.0"}

@@ -1,13 +1,15 @@
 # recall. — Retrieval Layer
 # Three-path RRF retrieval: ANN + keyword SQL JOIN + FTS5.
+# Tiered storage: hot (3-path), warm (2-path), cold (fallback only).
 # Gracefully degrades to 2-path (keyword + FTS5) when LM Studio is unavailable.
 # No LLM at query time.
 
 import re
 import numpy as np
 from typing import Optional
+from datetime import datetime, timezone
 
-from .store import Memory, SQLiteStore, extract_keywords as extract_entities
+from .store import Memory, SQLiteStore, extract_keywords, SAMPLING_INTERVAL
 from .embed import embed
 
 TOP_K = 10
@@ -50,7 +52,8 @@ def expand_query(query: str, max_terms: int = 10) -> str:
 
 # ─── ANN ──────────────────────────────────────────────────────────────────────
 
-def ann_search(store: SQLiteStore, query_embedding: list[float], k: int = 20) -> list[str]:
+def ann_search(store: SQLiteStore, query_embedding: list[float],
+               k: int = 20) -> list[str]:
     if not store.vec_available or not store.count():
         return []
     import sqlite3, sqlite_vec
@@ -66,7 +69,7 @@ def ann_search(store: SQLiteStore, query_embedding: list[float], k: int = 20) ->
     return [r[0] for r in rows]
 
 
-# ─── Three-path retrieval (degrades gracefully) ───────────────────────────────
+# ─── Single-tier retrieval ────────────────────────────────────────────────────
 
 def retrieve_relevant(
     query: str,
@@ -74,40 +77,39 @@ def retrieve_relevant(
     k: int = TOP_K,
     tag_filter: Optional[str] = None,
     hops: int = 2,
+    tier: Optional[str] = None,
+    include_cold: bool = False,
 ) -> list[Memory]:
-    """Three-path RRF retrieval.
+    """Three-path RRF retrieval for a single tier.
 
-    Path V: Vector search (ANN) via sqlite-vec
+    Path V: Vector search (ANN) via sqlite-vec (only if tier='hot')
     Path K: Keyword SQL JOIN with multi-hop expansion
     Path F: FTS5 full-text search
 
-    If LM Studio (embedding) is unavailable, Path V is skipped and the
-    system falls back to 2-path retrieval (keyword + FTS5).
+    Gracefully degrades to 2-path when ANN is unavailable.
     """
-    # Try to embed the expanded query; if unavailable, skip ANN paths
     expanded = expand_query(query, max_terms=20)
     query_embedding = embed(expanded) if expanded else None
     embed_available = query_embedding is not None
 
     if not embed_available:
-        # Graceful degradation: try bare query (no expansion) as fallback
         query_embedding = embed(query)
 
     path_results: dict[str, float] = {}
 
-    # Path V: Vector search (ANN) — only if embedding is available
-    if query_embedding is not None:
+    # Path V: Vector search (ANN) — only for hot tier
+    if query_embedding is not None and (tier is None or tier == "hot"):
         vec_ids = ann_search(store, query_embedding, k=k * 3)
         for rank, mid in enumerate(vec_ids):
             path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + rank)
 
-    # Path K: Keyword SQL JOIN (multi-hop)
+    # Path K: Keyword SQL JOIN (multi-hop, within tier)
     seed_ids = list(path_results.keys()) if path_results else []
     kw_ids = set(seed_ids)
     kw_rank = 0
     for hop in range(hops):
         rkws = store.get_related_keywords(seed_ids, limit=15) if seed_ids else []
-        new_ids = set(store.search_by_keywords(rkws, limit=k * 3))
+        new_ids = set(store.search_by_keywords(rkws, limit=k * 3, tier=tier))
         added = new_ids - kw_ids
         kw_ids.update(new_ids)
         seed_ids = list(added)
@@ -117,14 +119,14 @@ def retrieve_relevant(
         if not added or hop >= hops - 1:
             break
 
-    # Path F: FTS5 full-text search
-    fts_ids = store.fts_search(query, limit=k * 3)
+    # Path F: FTS5 full-text search (within tier)
+    fts_ids = store.fts_search(query, limit=k * 3, tier=tier)
     for rank, mid in enumerate(fts_ids):
         path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + rank)
 
     # Query keywords also contribute to keyword path
     query_kws = list(set(expanded.split()[:10]))
-    qkw_ids = store.search_by_keywords(query_kws, limit=k * 3)
+    qkw_ids = store.search_by_keywords(query_kws, limit=k * 3, tier=tier)
     for rank, mid in enumerate(qkw_ids):
         path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + rank)
 
@@ -136,7 +138,7 @@ def retrieve_relevant(
         }
 
     if not path_results:
-        all_mems = store.get_all()
+        all_mems = store.get_all(limit=k * 10)
         if tag_filter:
             all_mems = [m for m in all_mems if m.tag == tag_filter]
         return _rank_by_embedding(all_mems, query_embedding, k) if all_mems else []
@@ -154,6 +156,70 @@ def retrieve_relevant(
         return [mem for _, mem in scored[:k]]
 
 
+# ─── Tier Router ──────────────────────────────────────────────────────────────
+
+_tier_router_query_count = 0
+
+
+def retrieve_tiered(
+    query: str,
+    store: SQLiteStore,
+    k: int = TOP_K,
+) -> list[Memory]:
+    """Tier-aware retrieval with fill-gap fallback and lazy cold sampling.
+
+    1. Search hot tier first (3-path RRF)
+    2. If hot results < k, fill gap from warm (2-path RRF)
+    3. If hot+warm still < k, fill gap from cold (keywords + FTS5)
+    4. Increment access_count on all returned memories
+    5. Every N queries, sample cold tier for promotion
+    """
+    global _tier_router_query_count
+
+    all_results = []
+
+    # Step 1: Hot tier (3-path RRF)
+    if store.count_tier("hot") > 0:
+        hot_results = retrieve_relevant(query, store, k=k, tier="hot")
+        seen_ids = set(m.id for m in hot_results)
+        all_results.extend(hot_results)
+    else:
+        seen_ids = set()
+
+    # Step 2: Fill gap from warm tier (2-path RRF, no ANN)
+    if len(all_results) < k and store.count_tier("warm") > 0:
+        needed = k - len(all_results)
+        warm_results = retrieve_relevant(query, store, k=needed, tier="warm")
+        for m in warm_results:
+            if m.id not in seen_ids and len(all_results) < k:
+                all_results.append(m)
+                seen_ids.add(m.id)
+
+    # Step 3: Fill gap from cold tier (keywords + FTS5 only)
+    if len(all_results) < k and store.count_tier("cold") > 0:
+        needed = k - len(all_results)
+        cold_results = retrieve_relevant(query, store, k=needed, tier="cold")
+        for m in cold_results:
+            if m.id not in seen_ids and len(all_results) < k:
+                all_results.append(m)
+                seen_ids.add(m.id)
+                # Promote cold→warm when found via fill-gap
+                store.promote(m.id, "warm")
+
+    # Step 4: Increment access_count on returned memories
+    for mem in all_results:
+        store.increment_access(mem.id)
+
+    # Step 5: Lazy cold sampling (every N queries)
+    _tier_router_query_count += 1
+    if _tier_router_query_count >= SAMPLING_INTERVAL:
+        _tier_router_query_count = 0
+        query_kws = extract_keywords(query)
+        store.sample_cold_for_promotion(query_kws)
+
+    return all_results
+
+
 def _rank_by_embedding(
     memories: list[Memory],
     query_embedding: list[float] | None,
@@ -169,6 +235,6 @@ def _rank_by_embedding(
             sim = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-10))
             scored.append((sim, mem))
     if not scored:
-        return memories[:k]  # fallback: no embeddings to rank by, return latest
+        return memories[:k]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [mem for _, mem in scored[:k]]

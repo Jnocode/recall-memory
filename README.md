@@ -109,21 +109,37 @@ docker compose build
 ## Architecture
 
 ```text
-store.py    — SQLite backend (memories, keywords, FTS5, vec_embeddings)
-embed.py    — Nomic Embed via LM Studio REST API (768-dim)
-retrieve.py — Three-path RRF retrieval
-cli.py      — Typer CLI (add / query / stats / delete)
-recall_mcp.py — MCP server for agent integration
+store.py       — SQLite backend + tier management
+embed.py       — Nomic Embed via LM Studio REST API (768-dim)
+retrieve.py    — Three-path RRF retrieval + tier router
+cli.py         — Typer CLI (add / query / stats / delete / gc)
+recall_mcp.py  — MCP server for agent integration
 ```
+
+### Tiered Storage (v0.2.0+)
+
+Memories are split into three tiers to reduce compute and memory:
+
+| Tier | Capacity | Retrieval | Compute Cost |
+|------|:--------:|:----------|:------------:|
+| **Hot** | ~500 | ANN + keywords + FTS5 (3-path RRF) | Highest |
+| **Warm** | ~5000 | keywords + FTS5 only (2-path RRF) | Medium |
+| **Cold** | Unlimited | Not indexed, fill-gap fallback only | ~Zero |
+
+- **Hot**: full vectors in ANN index. Fastest search.
+- **Warm**: keyword/FTS5 only, no vectors. 66–99% less ANN work.
+- **Cold**: doesn't participate in normal queries. Only searched when hot+warm results are insufficient.
+
+Promotion/demotion is automatic based on access frequency. Cold memories are sampled every N queries for keyword overlap—if relevant, they're promoted back to warm. No cron, no UI, no configuration needed.
 
 Three parallel retrieval paths, fused via RRF (Reciprocal Rank Fusion):
 
 ```text
-Path V: Vector search (ANN) — sqlite-vec cosine similarity
-Path K: Keyword SQL JOIN — multi-hop keyword expansion
-Path F: FTS5 full-text search — porter tokenizer + unicode61
+Path V: Vector search (ANN) — sqlite-vec cosine similarity (hot tier only)
+Path K: Keyword SQL JOIN — multi-hop keyword expansion (all tiers)
+Path F: FTS5 full-text search — porter tokenizer + unicode61 (all tiers)
 
-RRF → sorted top-5
+Tier router → hot 3-path → warm 2-path → cold fill-gap
 ```
 
 No LLM calls at query time. No vector database. Just SQLite.
@@ -158,8 +174,12 @@ recall stats
 
 ```bash
 recall add "content"           # Store a memory
-recall query "question"        # Retrieve relevant memories
+recall query "question"        # Retrieve relevant memories (tiered)
+recall query "question" --include-cold  # Search cold tier too
 recall stats                   # Store statistics
+recall stats --verbose         # + tier distribution
+recall gc --dry-run            # Preview eviction candidates
+recall gc                      # Run garbage collection
 recall delete <id>             # Remove a memory
 ```
 
@@ -169,19 +189,46 @@ Three tools exposed via stdio MCP transport:
 
 | Tool | Parameters | Returns |
 |------|-----------|---------|
-| `recall` | `query: str` (required), `k: int (default 5)` | `{memories: [...], count: int}` |
+| `recall` | `query: str` (required), `k: int (default 5)`, `include_cold: bool (default false)` | `{memories: [...], count: int}` |
 | `store_memory` | `content: str` (required), `session_id: str`, `tag: str` | `{id: str, status: "stored"}` |
-| `memory_stats` | (none) | `{memories: int, keywords: int}` |
+| `memory_stats` | (none) | `{memories: int, keywords: int, tiers: {hot, warm, cold}}` |
+| `gc_memory` | `dry_run: bool (default false)` | `{evicted/ candidates: int, db_size_mb: float}` |
 
 ## Status
 
-Production-ready MVP. Tested against AIngram (tied on 1400 memories × 40 queries).
+Production-ready MVP with tiered storage (v0.2.0). Tested against AIngram (tied on 1400 memories × 40 queries).
 
 ```text
 Memories: 1400 (from Honcho)
 Keywords: 10560
-Latency:  ~80ms/query
+Latency:  ~80ms/query (hot), ~60ms/query (warm fill-gap)
+ANN scan: -66% (now) → -99% (at 50K memories)
+Memory:   ~1.5MB fixed for hot tier vs linear growth
 Eval:     recall@5 comparable to AIngram with full extractor
+```
+
+## Upgrading
+
+### From v0.1.x to v0.2.0
+
+```bash
+pip install --upgrade recall-sqlite
+```
+
+Schema migration is automatic — SQLite `ALTER TABLE` runs on first start.
+No manual steps needed. Your existing memories are preserved and will start
+in the "hot" tier.
+
+To verify:
+```bash
+recall stats --verbose
+# Should show the same memory count with tier distribution
+```
+
+### Rollback
+
+```bash
+pip install recall-sqlite==0.1.0
 ```
 
 ## Design decisions
