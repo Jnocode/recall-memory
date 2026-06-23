@@ -198,13 +198,20 @@ def retrieve_tiered(
     # Step 3: Fill gap from cold tier (keywords + FTS5 only)
     if len(all_results) < k and store.count_tier("cold") > 0:
         needed = k - len(all_results)
+        warm_capacity = WARM_CAPACITY - store.count_tier("warm")
         cold_results = retrieve_relevant(query, store, k=needed, tier="cold")
         for m in cold_results:
             if m.id not in seen_ids and len(all_results) < k:
                 all_results.append(m)
                 seen_ids.add(m.id)
-                # Promote cold→warm when found via fill-gap
-                store.promote(m.id, "warm")
+                # Promote cold→warm only if capacity available and not in cooldown
+                if warm_capacity > 0:
+                    cooldown_ok = (m.last_demoted_at is None or
+                        (datetime.now(timezone.utc) - m.last_demoted_at).total_seconds()
+                        >= COOLDOWN_HOURS * 3600)
+                    if cooldown_ok:
+                        store.promote(m.id, "warm")
+                        warm_capacity -= 1
 
     # Step 4: Increment access_count on returned memories
     for mem in all_results:

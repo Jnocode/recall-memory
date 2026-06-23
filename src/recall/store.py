@@ -179,12 +179,8 @@ class SQLiteStore:
                  memory.last_demoted_at.isoformat() if memory.last_demoted_at else None)
             )
             # Vec index: only for hot tier
-            if self.vec_available and memory.embedding and memory.tier == "hot":
-                vec_bytes = np.array(memory.embedding, dtype=np.float32).tobytes()
-                conn.execute(
-                    "INSERT OR REPLACE INTO vec_embeddings(id, embedding) VALUES (?, ?)",
-                    (memory.id, vec_bytes)
-                )
+            if memory.tier == "hot":
+                self._insert_vec_embedding(memory.id, memory.embedding)
             # Keyword index
             for kw in extract_keywords(memory.content):
                 conn.execute("INSERT OR REPLACE INTO keywords VALUES (?,?)",
@@ -338,18 +334,7 @@ class SQLiteStore:
 
             # Add vec_embedding
             mem = self.get(memory_id)
-            if mem and mem.embedding:
-                conn = sqlite3.connect(self.db_path)
-                conn.enable_load_extension(True)
-                if self.vec_available:
-                    import sqlite_vec
-                    sqlite_vec.load(conn)
-                vec_bytes = np.array(mem.embedding, dtype=np.float32).tobytes()
-                conn.execute(
-                    "INSERT OR REPLACE INTO vec_embeddings(id, embedding) VALUES (?, ?)",
-                    (memory_id, vec_bytes))
-                conn.commit()
-                conn.close()
+            self._insert_vec_embedding(memory_id, mem.embedding if mem else None)
         elif target_tier == "warm":
             # Remove vec_embedding when demoting from hot
             if current == "hot":
@@ -394,6 +379,23 @@ class SQLiteStore:
         finally:
             conn.close()
 
+    def _insert_vec_embedding(self, memory_id: str, embedding: list[float]):
+        """Insert or replace a vector embedding in the vec_embeddings table."""
+        if not self.vec_available or not embedding:
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.enable_load_extension(True)
+        import sqlite_vec
+        sqlite_vec.load(conn)
+        try:
+            vec_bytes = np.array(embedding, dtype=np.float32).tobytes()
+            conn.execute(
+                "INSERT OR REPLACE INTO vec_embeddings(id, embedding) VALUES (?, ?)",
+                (memory_id, vec_bytes))
+            conn.commit()
+        finally:
+            conn.close()
+
     def replenish_hot(self):
         """Promote top warm memories to fill hot tier vacancies."""
         hot_count = self.count_tier("hot")
@@ -402,13 +404,20 @@ class SQLiteStore:
         vacancy = HOT_CAPACITY - hot_count
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute(
-            """SELECT id FROM memories WHERE tier='warm'
+            """SELECT id, last_demoted_at FROM memories WHERE tier='warm'
                AND access_count >= ?
                ORDER BY access_count DESC, timestamp DESC LIMIT ?""",
             (PROMOTION_THRESHOLD, vacancy)).fetchall()
         conn.close()
+        now = datetime.now(timezone.utc)
         promoted = 0
-        for (mid,) in rows:
+        for row in rows:
+            mid, ld_str = row
+            # Skip if in cooldown
+            if ld_str:
+                ld = datetime.fromisoformat(ld_str)
+                if (now - ld).total_seconds() < COOLDOWN_HOURS * 3600:
+                    continue
             if self.promote(mid, "hot"):
                 promoted += 1
         return promoted
@@ -426,6 +435,7 @@ class SQLiteStore:
         """Evict low-score memories when DB is over capacity."""
         conn = sqlite3.connect(self.db_path)
         now = datetime.now(timezone.utc)
+        size_before = self._db_size_mb()
 
         # Score each warm/cold memory: (access_count + 1) * decay factor
         rows = conn.execute(
@@ -469,7 +479,7 @@ class SQLiteStore:
         conn.close()
         return {
             "evicted": evicted,
-            "db_size_before_mb": round(self._db_size_mb(), 1),
+            "db_size_before_mb": round(size_before, 1),
             "db_size_after_mb": round(size_after, 1),
         }
 
@@ -587,13 +597,22 @@ class SQLiteStore:
 
     # ─── Internal ──────────────────────────────────────────────────────────────
 
-    def _row_to_mem(self, row) -> Memory:
+    def _row_to_mem(self, row) -> Optional[Memory]:
+        if row is None:
+            return None
+        # Convert tuple to dict using known column order
+        cols = ["id", "content", "entities", "timestamp", "embedding",
+                "access_count", "session_id", "tag", "tier",
+                "last_accessed_at", "last_demoted_at"]
+        d = dict(zip(cols, row))
         return Memory(
-            id=row[0], content=row[1], entities=json.loads(row[2]),
-            timestamp=datetime.fromisoformat(row[3]),
-            embedding=json.loads(row[4]) if row[4] else None,
-            access_count=row[5], session_id=row[6], tag=row[7],
-            tier=row[8] if len(row) > 8 and row[8] else "hot",
-            last_accessed_at=datetime.fromisoformat(row[9]) if len(row) > 9 and row[9] else None,
-            last_demoted_at=datetime.fromisoformat(row[10]) if len(row) > 10 and row[10] else None,
+            id=d["id"], content=d["content"],
+            entities=json.loads(d["entities"]),
+            timestamp=datetime.fromisoformat(d["timestamp"]),
+            embedding=json.loads(d["embedding"]) if d["embedding"] else None,
+            access_count=d["access_count"],
+            session_id=d["session_id"], tag=d["tag"],
+            tier=d["tier"] if d["tier"] else "hot",
+            last_accessed_at=datetime.fromisoformat(d["last_accessed_at"]) if d["last_accessed_at"] else None,
+            last_demoted_at=datetime.fromisoformat(d["last_demoted_at"]) if d["last_demoted_at"] else None,
         )
