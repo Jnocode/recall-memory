@@ -1,4 +1,7 @@
 # recall. 🧠
+[![Hermes Memory Provider](https://img.shields.io/badge/Hermes-Memory%20Provider-blue)](https://github.com/NousResearch/hermes-agent/pull/51205)
+[![PyPI](https://img.shields.io/pypi/v/recall-sqlite)](https://pypi.org/project/recall-sqlite/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 **AI Agent 的輕量級記憶系統。**
 純 SQLite 實現的三路 RRF 檢索（ANN + 關鍵字 SQL JOIN + FTS5）。

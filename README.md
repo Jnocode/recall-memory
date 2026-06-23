@@ -1,4 +1,7 @@
 # recall. 🧠
+[![Hermes Memory Provider](https://img.shields.io/badge/Hermes-Memory%20Provider-blue)](https://github.com/NousResearch/hermes-agent/pull/51205)
+[![PyPI](https://img.shields.io/pypi/v/recall-sqlite)](https://pypi.org/project/recall-sqlite/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 **Better contextual retrieval for AI agents.**
 Three-path RRF retrieval (ANN + keyword SQL JOIN + FTS5) in pure SQLite.
