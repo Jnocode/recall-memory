@@ -231,6 +231,66 @@ Never, unless you care about disk space. Auto-triggers at 80MB DB size.
 - No cron jobs or background processes
 - Schema migration is automatic on `pip install --upgrade`
 
+## FAQ
+
+### Q: Hardcoded 的 hot/warm 容量限制會不會造成 thrashing（記憶頻繁升降）？
+
+不會。有三層防護：
+
+1. **24h cooldown** — 記憶被 demote 後 24 小時內不允許 promote 回去，避免短時間內反覆升降
+2. **Lifetime threshold** — `access_count ≥ 3` 才 promote，不是 recall 一次就升
+3. **Batch operation** — 主要的 `replenish_hot()` 不在 query 路徑上做，而是在寫入時觸發
+
+### Q: Promote/demote 執行到一半時，query 看到的是什麼狀態？
+
+SQLite WAL mode 保證 reader 看到每個 transaction 開始時的完整 snapshot。不會有「tier 已改但向量還沒寫完」的中間狀態。
+
+但 promote 不是單一原子操作：
+1. `UPDATE tier='hot'` → commit
+2. `INSERT vec_embedding` → commit
+
+如果 step 1 後 crash，會產生 tier=hot 但無向量的記憶。但這條記憶仍然可以透過 keyword+FTS5 找到，只是少了向量搜尋的精準度。記憶檢索是機率性的 — 漏掉一條剛 promote 的記憶，下次 query 就會找到。
+
+### Q: 高頻寫入會不會讓 WAL 檔案膨脹到超過 80MB？
+
+不會混淆兩個數字：
+- **80MB** 是主 DB 的 eviction 門檻（超過時自動刪除低分記憶），不是 WAL 大小
+- **WAL** 是暫存檔，checkpoint（預設 ~4MB 時）自動寫回主 DB 後清空
+
+Promote/demote 不是每寫一條記憶就觸發。目前只在兩種情況發生：
+1. 查詢時冷門記憶被命中才 promote（cold→warm）
+2. DB 超過 80MB 的 GC 才執行 demote
+
+每次 promote 就一兩個 INSERT/DELETE，不是幾百個 row。目前 DB 才 32MB，離 80MB threshold 還很遠。
+
+### Q: 邊緣端設備上會不會吃掉 SSD 壽命？
+
+每條記憶實際寫入（含所有 index）約 9KB。每天約 17 條新記憶 → 一年約 56MB。現代 SSD 壽命是幾百 TBW — 這點量連算都不值得算。
+
+即使長期累積加上偶爾的 promote/demote，寫入量也在灰塵級別。
+
+### Q: 高頻寫入下 store() 延遲會不會被 promote/demote 拖累？
+
+目前不會。GC 在 `store()` commit **之後**才檢查 DB size（`_gc_if_needed()`），且目前 32MB < 80MB threshold 時只是一個 `stat()` call（<1ms），不影響寫入速度。
+
+長遠如果 DB 超過 80MB，GC 會在 `store()` return 前跑 eviction，屆時可調高 threshold 或關閉自動 GC 改手動 `recall gc`。
+
+### Q: cooldown 時間為什麼是 24 小時？
+
+24 小時是保守預設值，防止短時間內的 thrashing。一條記憶被 demote 到 cold 通常代表它已經很久沒被 recall 到了 — 如果它在 24 小時內又變得相關，自然會被 lazy sampling（每 20 次 query 抽檢）重新 promote 回來。這個值可以通過修改 `store.py` 中的 `COOLDOWN_HOURS` 調整。
+
+### Q: 跟 Mem0 / Honcho 比差在哪？
+
+| 面向 | recall-sqlite | Mem0 | Honcho |
+|------|:-------------:|:----:|:------:|
+| Query-time LLM | 零 | 每次 call | 每次 call |
+| 遺忘機制 | ✅ 自動 tier demotion | ❌ 無 | ❌ 無 |
+| 向量 DB | 無（SQLite） | Qdrant/PGVector | PostgreSQL |
+| API Key 需要 | 無 | 需 API Key | 需 API Key |
+| 離線可用 | ✅（含 graceful fallback） | ❌ | ❌ |
+| 資料儲存 | 單一 SQLite 檔 | 自建 | 自建/雲端 |
+| p50 latency | ~80ms | ~890ms | ~1,420ms |
+
 ## Status
 
 Production-ready MVP with tiered storage (v0.2.0). Tested against AIngram (tied on 1400 memories × 40 queries).
