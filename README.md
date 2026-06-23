@@ -289,6 +289,12 @@ If the DB eventually exceeds 80MB, GC runs eviction before `store()` returns. At
 | Data storage | Single SQLite file | Self-hosted | Cloud/self-hosted |
 | p50 latency | ~80ms | ~890ms | ~1,420ms |
 
+### Q: Will there be multi-device sync / CRDT support?
+
+Not currently on the roadmap. recall-sqlite is designed as a local-first, single-device memory layer. The SQLite backend is intentionally simple — no conflict resolution, no cloud sync, no distributed locking.
+
+Sync could theoretically be layered on top (SQLite files are portable), but it would require careful handling of concurrent writes across devices. If you need multi-device memory, Honcho or Supermemory are better fits today.
+
 ## Status
 
 Production-ready MVP with tiered storage (v0.2.0). Tested against AIngram (tied on 1400 memories × 40 queries).

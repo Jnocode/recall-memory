@@ -211,6 +211,12 @@ Promote/demote 不是每次寫入都觸發。只在兩種情況發生：
 
 24 小時是保守的預設值，用於防止 thrashing。被 demote 到 cold 的記憶通常代表已經很久沒被 recall 到了——如果它在 24 小時內又變得相關，lazy sampling（每 20 次查詢抽檢）會自動將它 promote 回來。可透過修改 `store.py` 中的 `COOLDOWN_HOURS` 調整。
 
+### Q: 未來會有 multi-device sync / CRDT 支援嗎？
+
+目前不在 roadmap 上。recall-sqlite 設計為 local-first、單機記憶層。SQLite 後端刻意保持簡單 — 沒有衝突解決、沒有雲端同步、沒有分散式鎖定。
+
+理論上可以在上層疊加同步機制（SQLite 檔案是可攜帶的），但需要謹慎處理跨裝置的並發寫入。如果你需要多裝置記憶，Honcho 或 Supermemory 目前更適合。
+
 ### Q: 跟 Mem0 / Honcho 比差在哪？
 
 | 面向 | recall-sqlite | Mem0 | Honcho |
