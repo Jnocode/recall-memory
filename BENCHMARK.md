@@ -1,5 +1,7 @@
 # recall-sqlite Benchmark Report
 
+> **Disclaimer:** This is a preliminary benchmark. The dataset (1,469 memories, 40 queries) is from a single user's daily coding sessions over 6 months. Results should be treated as directional indicators, not definitive comparisons. Community contributions with different query patterns and dataset sizes are welcome.
+
 Comparison of memory providers available for Hermes Agent.
 
 ## Test Methodology
