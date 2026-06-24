@@ -3,6 +3,8 @@
 [![PyPI](https://img.shields.io/pypi/v/recall-sqlite)](https://pypi.org/project/recall-sqlite/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
+> **🔌 Hermes plugin → [github.com/Jnocode/recall-memory-hermes](https://github.com/Jnocode/recall-memory-hermes)** — 安裝指引與 Hermes Agent 整合設定
+
 **Better contextual retrieval for AI agents.**
 Three-path RRF retrieval (ANN + keyword SQL JOIN + FTS5) in pure SQLite.
 No LLM at query time. ~80ms latency. 1400 real memories.
