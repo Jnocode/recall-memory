@@ -76,7 +76,7 @@ class SQLiteStore:
         self._init_db()
 
     def _init_db(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.enable_load_extension(True)
         conn.execute("PRAGMA journal_mode=WAL")
         try:
@@ -160,7 +160,7 @@ class SQLiteStore:
         if not memory.id:
             raw = memory.content + str(memory.timestamp)
             memory.id = hashlib.md5(raw.encode()).hexdigest()[:12]
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.enable_load_extension(True)
         if self.vec_available:
             import sqlite_vec
@@ -198,27 +198,27 @@ class SQLiteStore:
         return memory.id
 
     def get(self, memory_id: str) -> Optional[Memory]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             row = conn.execute("SELECT * FROM memories WHERE id=?",
                                (memory_id,)).fetchone()
         return self._row_to_mem(row) if row else None
 
     def get_all(self, limit: int = 1000) -> list[Memory]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             rows = conn.execute(
                 "SELECT * FROM memories ORDER BY timestamp DESC LIMIT ?",
                 (limit,)).fetchall()
         return [self._row_to_mem(r) for r in rows]
 
     def get_by_session(self, session_id: str) -> list[Memory]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             rows = conn.execute(
                 "SELECT * FROM memories WHERE session_id=? ORDER BY timestamp DESC",
                 (session_id,)).fetchall()
         return [self._row_to_mem(r) for r in rows]
 
     def get_by_tag(self, tag: str, limit: int = 100) -> list[Memory]:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             rows = conn.execute(
                 "SELECT * FROM memories WHERE tag=? ORDER BY timestamp DESC LIMIT ?",
                 (tag, limit)).fetchall()
@@ -245,13 +245,13 @@ class SQLiteStore:
             idx = list(updates.keys()).index("last_demoted_at")
             vals[idx] = updates["last_demoted_at"].isoformat()
         vals.append(memory_id)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             conn.execute(f"UPDATE memories SET {set_clause} WHERE id=?", vals)
         conn.commit()
         return True
 
     def delete(self, memory_id: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             conn.enable_load_extension(True)
             if self.vec_available:
                 import sqlite_vec
@@ -267,7 +267,7 @@ class SQLiteStore:
         return cur.rowcount > 0
 
     def count(self, tag: Optional[str] = None, tier: Optional[str] = None) -> int:
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             q = "SELECT COUNT(*) FROM memories WHERE 1=1"
             params = []
             if tag:
@@ -279,7 +279,7 @@ class SQLiteStore:
             return conn.execute(q, params).fetchone()[0]
 
     def clear(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.enable_load_extension(True)
         if self.vec_available:
             import sqlite_vec
@@ -302,7 +302,7 @@ class SQLiteStore:
     def increment_access(self, memory_id: str):
         """Increment access_count and update last_accessed_at."""
         now = datetime.now(timezone.utc)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             conn.execute(
                 """UPDATE memories SET access_count=access_count+1,
                    last_accessed_at=? WHERE id=?""",
@@ -368,7 +368,7 @@ class SQLiteStore:
         return True
 
     def _remove_vec_embedding(self, memory_id: str):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.enable_load_extension(True)
         if self.vec_available:
             import sqlite_vec
@@ -385,7 +385,7 @@ class SQLiteStore:
         if hot_count <= HOT_CAPACITY:
             return 0
         excess = hot_count - HOT_CAPACITY
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         rows = conn.execute(
             """SELECT id FROM memories WHERE tier='hot'
                ORDER BY access_count ASC, timestamp ASC LIMIT ?""",
@@ -407,7 +407,7 @@ class SQLiteStore:
         """Insert or replace a vector embedding in the vec_embeddings table."""
         if not self.vec_available or not embedding:
             return
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.enable_load_extension(True)
         import sqlite_vec
         sqlite_vec.load(conn)
@@ -426,7 +426,7 @@ class SQLiteStore:
         if hot_count >= HOT_CAPACITY:
             return 0
         vacancy = HOT_CAPACITY - hot_count
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         rows = conn.execute(
             """SELECT id, last_demoted_at FROM memories WHERE tier='warm'
                AND access_count >= ?
@@ -457,7 +457,7 @@ class SQLiteStore:
 
     def evict(self, dry_run: bool = False) -> dict:
         """Evict low-score memories when DB is over capacity."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         now = datetime.now(timezone.utc)
         size_before = self._db_size_mb()
 
@@ -482,7 +482,7 @@ class SQLiteStore:
         to_evict = candidates[:max(0, len(candidates) - target_count)]
 
         if dry_run:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
             size_before = self._db_size_mb()
             conn.close()
             return {
@@ -498,7 +498,7 @@ class SQLiteStore:
                 self.delete(mid)
                 evicted += 1
 
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         size_after = self._db_size_mb()
         conn.close()
         return {
@@ -526,7 +526,7 @@ class SQLiteStore:
         if cold_count == 0 or not query_keywords:
             return 0
 
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         # Get random cold memories
         sample_size = min(2, cold_count)
         rows = conn.execute(
@@ -572,14 +572,14 @@ class SQLiteStore:
             q = f"SELECT DISTINCT k.memory_id FROM keywords k WHERE k.keyword IN ({ph})"
         q += " LIMIT ?"
         params.append(limit)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             rows = conn.execute(q, params).fetchall()
         return [r[0] for r in rows]
 
     def fts_search(self, query: str, limit: int = 20,
                    tier: Optional[str] = None) -> list[str]:
         try:
-            with sqlite3.connect(self.db_path) as conn:
+            with sqlite3.connect(self.db_path, timeout=30.0) as conn:
                 safe = " ".join(f'"{w}"' for w in query.split() if len(w) > 2)
                 if not safe:
                     return []
@@ -599,7 +599,7 @@ class SQLiteStore:
         if not memory_ids:
             return []
         ph = ",".join("?" for _ in memory_ids)
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             rows = conn.execute(
                 f"SELECT keyword, COUNT(*) as cnt FROM keywords WHERE memory_id IN ({ph}) "
                 f"GROUP BY keyword ORDER BY cnt DESC LIMIT ?",
@@ -609,7 +609,7 @@ class SQLiteStore:
 
     def get_tier_summary(self) -> dict:
         """Return tier distribution for stats display."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         rows = conn.execute(
             "SELECT COALESCE(tier, 'hot') as tier, COUNT(*) FROM memories GROUP BY tier"
         ).fetchall()

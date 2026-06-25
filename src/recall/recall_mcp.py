@@ -59,7 +59,7 @@ def tool_store(content: str, session_id: str = "", tag: str = "episodic") -> dic
 def tool_stats() -> dict:
     """Get memory store statistics with tier distribution."""
     store = get_store()
-    conn = sqlite3.connect(DEFAULT_DB_PATH)
+    conn = sqlite3.connect(DEFAULT_DB_PATH, timeout=30.0)
     kw_count = conn.execute("SELECT COUNT(*) FROM keywords").fetchone()[0]
     conn.close()
     tiers = store.get_tier_summary()
@@ -199,6 +199,32 @@ if __name__ == "__main__":
         print("recall. MCP Server v1.1.0")
         print("Run via: python -m recall.recall_mcp")
         sys.exit(0)
+
+    if os.name == "nt":
+        import ctypes, threading, time
+        def monitor_parent():
+            ppid = os.getppid()
+            if ppid <= 1:
+                return
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, ppid)
+            if not handle:
+                os._exit(0)
+            try:
+                while True:
+                    exit_code = ctypes.c_ulong()
+                    if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                        break
+                    if exit_code.value != 259:
+                        break
+                    time.sleep(2)
+            finally:
+                kernel32.CloseHandle(handle)
+            os._exit(0)
+
+        t = threading.Thread(target=monitor_parent, daemon=True)
+        t.start()
 
     while True:
         try:
