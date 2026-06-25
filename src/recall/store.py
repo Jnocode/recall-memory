@@ -180,7 +180,7 @@ class SQLiteStore:
             )
             # Vec index: only for hot tier
             if memory.tier == "hot":
-                self._insert_vec_embedding(memory.id, memory.embedding)
+                self._insert_vec_embedding(memory.id, memory.embedding, conn=conn)
             # Keyword index
             for kw in extract_keywords(memory.content):
                 conn.execute("INSERT OR REPLACE INTO keywords VALUES (?,?)",
@@ -403,22 +403,29 @@ class SQLiteStore:
         self.replenish_hot()
         self._gc_if_needed()
 
-    def _insert_vec_embedding(self, memory_id: str, embedding: list[float]):
+    def _insert_vec_embedding(self, memory_id: str, embedding: list[float], conn=None):
         """Insert or replace a vector embedding in the vec_embeddings table."""
         if not self.vec_available or not embedding:
             return
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        conn.enable_load_extension(True)
-        import sqlite_vec
-        sqlite_vec.load(conn)
+        
+        should_close = False
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            conn.enable_load_extension(True)
+            import sqlite_vec
+            sqlite_vec.load(conn)
+            should_close = True
+            
         try:
             vec_bytes = np.array(embedding, dtype=np.float32).tobytes()
             conn.execute(
                 "INSERT OR REPLACE INTO vec_embeddings(id, embedding) VALUES (?, ?)",
                 (memory_id, vec_bytes))
-            conn.commit()
+            if should_close:
+                conn.commit()
         finally:
-            conn.close()
+            if should_close:
+                conn.close()
 
     def replenish_hot(self):
         """Promote top warm memories to fill hot tier vacancies."""
