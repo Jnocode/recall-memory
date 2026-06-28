@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1080,height=720">
+<title>recall-sqlite Demo</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d1117; width: 1080px; height: 720px; overflow: hidden; font-family: 'Microsoft JhengHei', system-ui, sans-serif; color: #e6edf3; }
+
+.slide { display: none; width: 1080px; height: 720px; position: relative; padding: 40px 60px; }
+.slide.active { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+
+/* Accent bar */
+.accent { position: absolute; top: 30px; left: 60px; right: 60px; height: 4px; background: linear-gradient(90deg, #58a6ff, #3fb950); border-radius: 2px; }
+
+/* Title scene */
+.title-scene h1 { font-size: 64px; font-weight: 700; margin-bottom: 12px; }
+.title-scene .sub { font-size: 28px; color: #8b949e; margin-bottom: 60px; }
+.title-scene .tag { font-size: 18px; color: #58a6ff; background: #1a2332; padding: 8px 24px; border-radius: 20px; border: 1px solid #30363d; }
+
+/* Problem scene */
+.problem-items { width: 100%; max-width: 900px; margin-top: 40px; }
+.problem-item { display: flex; align-items: center; gap: 20px; padding: 20px 24px; margin-bottom: 16px; background: #161b22; border: 1px solid #30363d; border-radius: 12px; animation: fadeIn 0.5s ease-out both; }
+.problem-item:nth-child(2) { animation-delay: 0.3s; }
+.problem-item:nth-child(3) { animation-delay: 0.6s; }
+.problem-item .icon { width: 60px; height: 60px; border-radius: 50%; background: #1c2128; display: flex; align-items: center; justify-content: center; font-size: 28px; flex-shrink: 0; }
+.problem-item .text { flex: 1; }
+.problem-item .text .title { font-size: 22px; font-weight: 600; }
+.problem-item .text .desc { font-size: 16px; color: #8b949e; margin-top: 4px; }
+.problem-item .arrow { color: #3fb950; font-size: 24px; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Cards layout */
+.card-row { display: flex; gap: 24px; width: 100%; max-width: 960px; margin-top: 30px; justify-content: center; }
+.card { background: #161b22; border: 1px solid #30363d; border-radius: 16px; padding: 28px 20px; text-align: center; flex: 1; max-width: 290px; animation: fadeIn 0.5s ease-out both; }
+.card:nth-child(2) { animation-delay: 0.2s; }
+.card:nth-child(3) { animation-delay: 0.4s; }
+.card .icon { font-size: 44px; margin-bottom: 16px; }
+.card .ctitle { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+.card .cdesc { font-size: 16px; color: #8b949e; }
+
+/* Benefit cards */
+.benefit-card { background: #161b22; border: 1px solid #30363d; border-radius: 16px; padding: 30px 20px; text-align: center; flex: 1; max-width: 290px; }
+.benefit-card .icon { font-size: 52px; margin-bottom: 16px; }
+.benefit-card .ctitle { font-size: 24px; font-weight: 600; margin-bottom: 10px; }
+.benefit-card .cdesc { font-size: 16px; color: #8b949e; }
+
+/* Steps */
+.step-row { display: flex; gap: 24px; margin-top: 30px; width: 100%; max-width: 960px; justify-content: center; }
+.step { text-align: center; flex: 1; max-width: 290px; }
+.step .num { width: 60px; height: 60px; border-radius: 50%; background: #1a2332; border: 2px solid #58a6ff; display: flex; align-items: center; justify-content: center; font-size: 28px; color: #58a6ff; font-weight: 700; margin: 0 auto 16px; }
+.step .stitle { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+.step .sdesc { font-size: 15px; color: #8b949e; }
+.step .tag { display: inline-block; margin-top: 12px; padding: 4px 16px; border-radius: 12px; background: #1c2128; border: 1px solid #30363d; font-size: 13px; color: #3fb950; }
+
+/* Flow */
+.flow-row { display: flex; gap: 8px; align-items: center; margin-top: 30px; width: 100%; max-width: 960px; justify-content: center; }
+.flow-step { text-align: center; background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 20px 12px; flex: 1; }
+.flow-step .icon { font-size: 36px; margin-bottom: 8px; }
+.flow-step .ftitle { font-size: 18px; font-weight: 600; }
+.flow-step .fdesc { font-size: 14px; color: #8b949e; margin-top: 4px; }
+.flow-arrow { font-size: 28px; color: #58a6ff; flex-shrink: 0; }
+
+/* Section headers */
+.section-title { font-size: 18px; color: #8b949e; margin-bottom: 8px; }
+.section-header { font-size: 36px; font-weight: 700; margin-bottom: 20px; }
+.subtitle-line { font-size: 18px; color: #8b949e; text-align: center; margin-top: 12px; }
+.glow-text { font-size: 40px; font-weight: 700; color: #58a6ff; text-shadow: 0 0 40px rgba(88,166,255,0.3); }
+
+/* CTA */
+.cta-box { background: #1c2128; border: 1px solid #30363d; border-radius: 12px; padding: 16px 32px; font-family: 'Consolas', monospace; font-size: 28px; color: #3fb950; margin: 20px 0; }
+.bottom-bar { position: absolute; bottom: 40px; left: 60px; right: 60px; background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 14px 20px; text-align: center; font-size: 14px; color: #8b949e; }
+
+/* Headers */
+h2 { font-size: 18px; color: #8b949e; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 8px; }
+h3 { font-size: 36px; font-weight: 700; margin-bottom: 24px; }
+</style>
+</head>
+<body>
+
+<!-- S1: Title -->
+<div class="slide active title-scene" id="s1">
+  <div class="accent"></div>
+  <h1>你的 AI 助理<br>有失憶症嗎？</h1>
+  <div class="sub">你跟它說過的，它真的記得嗎？</div>
+  <div class="tag">recall-sqlite · 開源 AI 記憶引擎</div>
+</div>
+
+<!-- S2: Problem -->
+<div class="slide" id="s2">
+  <div class="accent"></div>
+  <h2>你每天在重複的事</h2>
+  <div class="problem-items">
+    <div class="problem-item">
+      <div class="icon">💬</div>
+      <div class="text"><div class="title">你告訴 AI 你的偏好</div><div class="desc">「用 Docker 部署，不要 Dockerfile」</div></div>
+      <div class="arrow">↓</div>
+    </div>
+    <div class="problem-item">
+      <div class="icon">❌</div>
+      <div class="text"><div class="title">AI 忘記了</div><div class="desc">「好的，我創建一個 Dockerfile...」</div></div>
+      <div class="arrow">↓</div>
+    </div>
+    <div class="problem-item">
+      <div class="icon">😤</div>
+      <div class="text"><div class="title">你要再說一次</div><div class="desc">「我說過了！docker-compose！」</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- S3: Pain Points -->
+<div class="slide" id="s3">
+  <div class="accent"></div>
+  <h2>所有方案的問題</h2>
+  <h3>記憶管理沒有好選擇</h3>
+  <div class="card-row">
+    <div class="card"><div class="icon">💬</div><div class="ctitle">對話塞不下</div><div class="cdesc">記憶太多 Session 直接爆炸</div></div>
+    <div class="card"><div class="icon">☁️</div><div class="ctitle">雲端資料庫太貴</div><div class="cdesc">租 Vector DB 要 Infra 要月費</div></div>
+    <div class="card"><div class="icon">🔥</div><div class="ctitle">AI 記更燒錢</div><div class="cdesc">每次查詢都在花 Token 費用</div></div>
+  </div>
+  <div class="bottom-bar">解決方案：要嘛燒錢、要嘛重教、要嘛換工具一切歸零</div>
+</div>
+
+<!-- S4: Solution -->
+<div class="slide" id="s4">
+  <div class="accent"></div>
+  <h2>解決方案</h2>
+  <div class="glow-text" style="margin: 30px 0 20px;">recall-sqlite</div>
+  <div style="font-size: 24px; color: #e6edf3; text-align: center; margin-bottom: 10px;">給你的 AI 一個不會失憶的大腦</div>
+  <div style="font-size: 18px; color: #8b949e; text-align: center;">一條指令安裝 · 單一檔案 · 開源免費</div>
+</div>
+
+<!-- S5: Setup -->
+<div class="slide" id="s5">
+  <div class="accent"></div>
+  <h2>開始使用只要三步</h2>
+  <div class="step-row">
+    <div class="step"><div class="num">1</div><div class="stitle">下載 LM Studio</div><div class="sdesc">免費，載入 nomic-embed 模型</div><div class="tag">約 150MB</div></div>
+    <div class="step"><div class="num">2</div><div class="stitle">安裝 recall</div><div class="sdesc">pip install recall-sqlite</div><div class="tag">一條指令</div></div>
+    <div class="step"><div class="num">3</div><div class="stitle">開始使用</div><div class="sdesc">AI 自動存取記憶</div><div class="tag">零設定</div></div>
+  </div>
+  <div class="subtitle-line" style="margin-top: 40px;">不用 GPU · 不用 API Key · 不用上雲端</div>
+</div>
+
+<!-- S6: Benefits -->
+<div class="slide" id="s6">
+  <div class="accent"></div>
+  <h2>為什麼不一樣</h2>
+  <div class="card-row">
+    <div class="benefit-card"><div class="icon" style="color:#3fb950;">⚡</div><div class="ctitle">超快回應</div><div class="cdesc">80 毫秒<br>比眨眼還快 10 倍</div></div>
+    <div class="benefit-card"><div class="icon" style="color:#58a6ff;">🔒</div><div class="ctitle">完全離線</div><div class="cdesc">資料不離開你的電腦<br>不需網路</div></div>
+    <div class="benefit-card"><div class="icon" style="color:#d29922;">💰</div><div class="ctitle">完全免費</div><div class="cdesc">不用月費<br>沒有隱藏費用</div></div>
+  </div>
+  <div class="bottom-bar">對比：其他方案需要雲端 AI + 資料庫 + 網路連線 &nbsp;·&nbsp; recall-sqlite 只需要一個檔案</div>
+</div>
+
+<!-- S7: How it works -->
+<div class="slide" id="s7">
+  <div class="accent"></div>
+  <h2>運作方式</h2>
+  <div class="flow-row">
+    <div class="flow-step"><div class="icon">🗣️</div><div class="ftitle">你告訴 AI</div><div class="fdesc">「用 Docker 部署」</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="icon">🧠</div><div class="ftitle">AI 記住</div><div class="fdesc">存入 SQLite</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="icon">🔄</div><div class="ftitle">跨工具記憶</div><div class="fdesc">換 AI 也記得</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="icon">⚡</div><div class="ftitle">瞬間找到</div><div class="fdesc">80ms 就找到</div></div>
+  </div>
+  <div class="subtitle-line" style="margin-top: 30px;">三種方法同時找：文字相似度 + 關鍵字 + 全文搜尋</div>
+  <div style="text-align:center;font-size:14px;color:#8b949e;margin-top:8px;">不需要叫 AI 來記 · 不需要上雲端</div>
+</div>
+
+<!-- S8: CTA -->
+<div class="slide" id="s8">
+  <div class="accent"></div>
+  <h2>開始使用</h2>
+  <div class="cta-box">pip install recall-sqlite</div>
+  <div class="subtitle-line">免費安裝 · 不用伺服器 · 零花費</div>
+  <div style="margin-top: 24px; font-size: 20px; color: #58a6ff;">🧠 github.com/Jnocode/recall-memory</div>
+  <div style="margin-top: 12px; font-size: 14px; color: #8b949e;">🏆 已納入 Hermes Agent 官方記憶供應商</div>
+  <div style="margin-top: 50px; padding: 8px 24px; border-radius: 20px; border: 1px solid #30363d; font-size: 14px; color: #8b949e; background: #1c2128;">開源 · Apache 2.0 · 免費</div>
+</div>
+
+</body>
+</html>
