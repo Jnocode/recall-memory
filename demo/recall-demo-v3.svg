@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="620" viewBox="0 0 940 620">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&amp;display=swap');
+    </style>
+  </defs>
+  
+  <!-- Background -->
+  <rect x="0" y="0" width="940" height="620" rx="8" ry="8" fill="#0d1117"/>
+  
+  <!-- Top bar -->
+  <rect x="0" y="0" width="940" height="40" rx="8" ry="8" fill="#161b22"/>
+  <rect x="0" y="30" width="940" height="10" fill="#161b22"/>
+  
+  <!-- Close dots -->
+  <circle cx="16" cy="20" r="5" fill="#f85149" opacity="0.8"/>
+  <circle cx="34" cy="20" r="5" fill="#d29922" opacity="0.8"/>
+  <circle cx="52" cy="20" r="5" fill="#3fb950" opacity="0.8"/>
+  
+  <!-- Logo and title -->
+  <text x="75" y="25" fill="#58a6ff" font-family="system-ui, sans-serif" font-size="13" font-weight="600">recall-sqlite</text>
+  <text x="175" y="25" fill="#8b949e" font-family="system-ui, sans-serif" font-size="11">v0.2 · Three-path RRF · ~80ms · Zero LLM</text>
+  
+  <!-- Terminal window (left side) -->
+  <rect x="14" y="50" width="560" height="555" rx="6" ry="6" fill="#0d1117" stroke="#30363d" stroke-width="1"/>
+  <foreignObject x="20" y="56" width="548" height="543">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace; font-size: 12.5px; line-height: 1.6; color: #e6edf3; white-space: pre-wrap; overflow: hidden;">
+      <span style='color:#3fb950'>$</span> <span style='color:#e6edf3'>recall query "Docker deployment" --k 3</span><br/><span style='color:#e6edf3'></span><br/><span style='color:#58a6ff'>🔍 Query: Docker deployment</span><br/><span style='color:#e6edf3'>────────────────────────────────────────────────────────────</span><br/><span style='color:#e6edf3'>  1. [H] [06-23] [semantic] Jun prefers docker-compose over Dockerfile for local dev</span><br/><span style='color:#e6edf3'>  2. [H] [06-23] [episodic] NAS uses Docker for all services</span><br/><span style='color:#e6edf3'>  3. [H] [06-23] [episodic] Docker compose over docker run for multi-service</span><br/><span style='color:#e6edf3'></span><br/><span style='color:#8b949e'># 62 memories · 3-path RRF · no LLM call at query time</span><br/><span style='color:#e6edf3'></span><br/><span style='color:#3fb950'>$</span> <span style='color:#e6edf3'>recall stats --verbose</span><br/><span style='color:#ff79c6'>📊 recall. stats</span><br/><span style='color:#e6edf3'>──────────────────────────────</span><br/><span style='color:#e6edf3'>  Total:     62</span><br/><span style='color:#e6edf3'>  Episodic:  42</span><br/><span style='color:#e6edf3'>  Semantic:  20</span><br/><span style='color:#e6edf3'></span><br/><span style='color:#e6edf3'>  Tier Distribution:</span><br/><span style='color:#e6edf3'>    Hot:   62  (full ANN + keyword + FTS5)</span><br/><span style='color:#e6edf3'>    Warm:  0   (keyword + FTS5 only)</span><br/><span style='color:#e6edf3'>    Cold:  0   (fill-gap fallback)</span><br/><span style='color:#e6edf3'></span><br/><span style='color:#8b949e'># Auto forget: promote/demote pipeline ready — triggers at 500 memories</span><br/><span style='color:#e6edf3'></span><br/><span style='color:#3fb950'>$</span> <span style='color:#e6edf3'>recall query "project architecture" --k 3</span><br/><span style='color:#e6edf3'></span><br/><span style='color:#58a6ff'>🔍 Query: project architecture</span><br/><span style='color:#e6edf3'>────────────────────────────────────────────────────────────</span><br/><span style='color:#e6edf3'>  1. [H] [06-23] [semantic] Project uses PostgreSQL with asyncpg for production DB</span><br/><span style='color:#e6edf3'>  2. [H] [06-23] [episodic] SQLAlchemy for ORM, but raw SQL for performance</span><br/><span style='color:#e6edf3'>  3. [H] [06-23] [episodic] Use asyncpg for PostgreSQL connections</span><br/>
+    </div>
+  </foreignObject>
+  
+  <!-- Info cards (right side) -->
+  <foreignObject x="585" y="50" width="342" height="555">
+    
+<div style="font-family: system-ui, sans-serif; color: #e6edf3; font-size: 12px; line-height: 1.5; padding: 0;">
+  
+  <!-- Card 1: Key Differentiators -->
+  <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; margin-bottom: 10px;">
+    <div style="font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #58a6ff;">⚡ 核心差異</div>
+    <table style="width: 100%; border-collapse: collapse;">
+      <tr><td style="padding: 3px 0; color: #3fb950;">✅</td><td style="padding: 3px 6px;">Query-time LLM</td><td style="padding: 3px 0; color: #f85149;"><b>Zero</b></td></tr>
+      <tr><td style="padding: 3px 0; color: #3fb950;">✅</td><td style="padding: 3px 6px;">Latency (p50)</td><td style="padding: 3px 0; color: #d29922;"><b>~80ms</b></td></tr>
+      <tr><td style="padding: 3px 0; color: #3fb950;">✅</td><td style="padding: 3px 6px;">Vector DB</td><td style="padding: 3px 0; color: #58a6ff;"><b>None (SQLite)</b></td></tr>
+      <tr><td style="padding: 3px 0; color: #3fb950;">✅</td><td style="padding: 3px 6px;">Offline capable</td><td style="padding: 3px 0; color: #3fb950;"><b>Yes</b></td></tr>
+      <tr><td style="padding: 3px 0; color: #3fb950;">✅</td><td style="padding: 3px 6px;">API key</td><td style="padding: 3px 0; color: #3fb950;"><b>Not needed</b></td></tr>
+      <tr><td style="padding: 3px 0; color: #3fb950;">✅</td><td style="padding: 3px 6px;">Forgetting mechanism</td><td style="padding: 3px 0; color: #3fb950;"><b>Auto tier demotion</b></td></tr>
+    </table>
+    <div style="color: #8b949e; font-size: 10px; margin-top: 6px;">⚡ latency: BENCHMARK.md (1400 mem × 40 queries)</div>
+  </div>
+  
+  <!-- Card 2: Architecture -->
+  <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; margin-bottom: 10px;">
+    <div style="font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #58a6ff;">🔧 Three-Path RRF</div>
+    <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.6;">
+      <span style="color:#3fb950;">ANN</span>  sqlite-vec · cosine similarity<br/>
+      <span style="color:#d29922;">KW</span>   SQL JOIN · multi-hop expansion<br/>
+      <span style="color:#58a6ff;">FTS5</span> full-text search · BM25 scoring<br/>
+      <span style="color:#8b949e;">↓ RRF fusion (no LLM re-rank)</span><br/>
+      <span style="color:#e6edf3;">3 results returned · ~80ms</span>
+    </div>
+  </div>
+  
+  <!-- Card 3: Comparison -->
+  <div style="background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; margin-bottom: 10px;">
+    <div style="font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #58a6ff;">📊 vs Alternatives</div>
+    <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+      <tr style="color: #8b949e;">
+        <th style="text-align: left; padding: 2px 4px; border-bottom: 1px solid #30363d;"></th>
+        <th style="text-align: center; padding: 2px 4px; border-bottom: 1px solid #30363d; color: #3fb950;">recall</th>
+        <th style="text-align: center; padding: 2px 4px; border-bottom: 1px solid #30363d;">Mem0</th>
+        <th style="text-align: center; padding: 2px 4px; border-bottom: 1px solid #30363d;">Honcho</th>
+      </tr>
+      <tr><td style="padding: 2px 4px; color: #e6edf3;">LLM/query</td><td style="text-align: center; padding: 2px 4px; color: #3fb950;">❌</td><td style="text-align: center; padding: 2px 4px;">✅</td><td style="text-align: center; padding: 2px 4px;">✅</td></tr>
+      <tr><td style="padding: 2px 4px; color: #e6edf3;">p50</td><td style="text-align: center; padding: 2px 4px; color: #3fb950; font-weight:600;">80ms</td><td style="text-align: center; padding: 2px 4px;">890ms</td><td style="text-align: center; padding: 2px 4px;">1,420ms</td></tr>
+      <tr><td style="padding: 2px 4px; color: #e6edf3;">VectorDB</td><td style="text-align: center; padding: 2px 4px; color: #3fb950;">None</td><td style="text-align: center; padding: 2px 4px;">Qdrant</td><td style="text-align: center; padding: 2px 4px;">PG</td></tr>
+      <tr><td style="padding: 2px 4px; color: #e6edf3;">Offline</td><td style="text-align: center; padding: 2px 4px; color: #3fb950;">✅</td><td style="text-align: center; padding: 2px 4px;">❌</td><td style="text-align: center; padding: 2px 4px;">❌</td></tr>
+    </table>
+    <div style="color: #8b949e; font-size: 10px; margin-top: 6px;">⚠️ Same embed model (nomic-embed-v1.5). Source: BENCHMARK.md</div>
+  </div>
+  
+  <!-- Card 4: CTA -->
+  <div style="background: #1c2128; border: 1px solid #30363d; border-radius: 8px; padding: 14px; text-align: center;">
+    <div style="color: #3fb950; font-weight: 600; font-size: 14px;">🏆 Hermes Agent PR #51205</div>
+    <div style="font-family: 'JetBrains Mono', monospace; font-size: 13px; margin: 8px 0; color: #d29922;">
+      pip install recall-sqlite
+    </div>
+    <div style="color: #8b949e; font-size: 11px;">
+      github.com/Jnocode/recall-memory
+    </div>
+  </div>
+  
+</div>
+
+  </foreignObject>
+  
+</svg>
