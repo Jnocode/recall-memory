@@ -5,6 +5,14 @@
 
 > **🔌 Hermes plugin → [github.com/Jnocode/recall-memory-hermes](https://github.com/Jnocode/recall-memory-hermes)** — 安裝指引與 Hermes Agent 整合設定
 
+<p align="center">
+  <a href="https://raw.githubusercontent.com/Jnocode/recall-memory/master/demo/recall-demo-video-narrated.mp4">
+    <img src="https://img.shields.io/badge/🎬%20看%20Demo%20影片-58s-blue?style=for-the-badge" alt="Demo Video">
+  </a>
+</p>
+
+> 👀 **非開發者？** 點上面的按鈕看 58 秒影片，了解 recall 在做什麼。不需要懂程式碼。
+
 **Better contextual retrieval for AI agents.**
 Three-path RRF retrieval (ANN + keyword SQL JOIN + FTS5) in pure SQLite.
 No LLM at query time. ~80ms latency. 1400 real memories.
