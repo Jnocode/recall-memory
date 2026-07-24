@@ -304,9 +304,25 @@ If the DB eventually exceeds 80MB, GC runs eviction before `store()` returns. At
 
 ### Q: Will there be multi-device sync / CRDT support?
 
-Not currently on the roadmap. recall-sqlite is designed as a local-first, single-device memory layer. The SQLite backend is intentionally simple — no conflict resolution, no cloud sync, no distributed locking.
+Yes — as of v0.3, multi-device sync ships via `recall-sync` (see
+[docs/multi-device-sync.md](docs/multi-device-sync.md)). Each writer keeps its
+own SQLite file; a sync daemon merges them on a schedule with
+last-write-wins conflict resolution. No CRDT — deliberately simple.
 
-Sync could theoretically be layered on top (SQLite files are portable), but it would require careful handling of concurrent writes across devices. If you need multi-device memory, Honcho or Supermemory are better fits today.
+For remote access (phone not on LAN), pair it with Tailscale.
+
+## What's new in v0.3
+
+Cross-carrier long-term memory + mobile support:
+
+- **Retrieval scores** — `Memory.score` is filled by retrieval and surfaced through the MCP tools, REST API, and Hermes plugin output
+- **Session isolation** — `session_id_filter` on all retrieval paths prevents context bleeding between projects; legacy memories (empty session) stay visible
+- **sync_turn v1** — Hermes plugin now stores both user and assistant turns
+- **Multi-device sync** — `recall-sync` daemon merges Hermes DB ↔ server DB ([docs](docs/multi-device-sync.md))
+- **HTTP MCP endpoint** — any MCP client can connect to `recall-server /mcp` over the network; optional API-key auth ([docs](docs/ai-carrier-integration.md))
+- **Extension** — now also captures Gemini and Grok conversations
+- **Mobile offline mode** — Flutter app keeps a local SQLite mirror (incremental pull sync); offline search runs 2-path retrieval (keyword index + full-text) on device, and offline writes queue until reconnect
+- **Fix** — sqlite-vec ≥0.1.x KNN query syntax (`k = N` constraint); missing imports in tiered retrieval
 
 ## Status
 

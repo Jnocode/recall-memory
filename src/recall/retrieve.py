@@ -9,7 +9,8 @@ import numpy as np
 from typing import Optional
 from datetime import datetime, timezone
 
-from .store import Memory, SQLiteStore, extract_keywords, SAMPLING_INTERVAL
+from .store import (Memory, SQLiteStore, extract_keywords, SAMPLING_INTERVAL,
+                    WARM_CAPACITY, COOLDOWN_HOURS)
 from .embed import embed
 
 TOP_K = 10
@@ -61,9 +62,12 @@ def ann_search(store: SQLiteStore, query_embedding: list[float],
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     vec_bytes = np.array(query_embedding, dtype=np.float32).tobytes()
+    # NOTE: sqlite-vec >= 0.1.x requires the `k = N` constraint syntax for
+    # vec0 KNN queries (plain LIMIT / bound params are rejected)
     rows = conn.execute(
-        "SELECT id FROM vec_embeddings WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-        (vec_bytes, k)
+        f"SELECT id FROM vec_embeddings WHERE embedding MATCH ? "
+        f"AND k = {int(k)} ORDER BY distance",
+        (vec_bytes,)
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]
@@ -79,6 +83,7 @@ def retrieve_relevant(
     hops: int = 2,
     tier: Optional[str] = None,
     include_cold: bool = False,
+    session_id_filter: Optional[str] = None,
 ) -> list[Memory]:
     """Three-path RRF retrieval for a single tier.
 
@@ -109,7 +114,8 @@ def retrieve_relevant(
     kw_rank = 0
     for hop in range(hops):
         rkws = store.get_related_keywords(seed_ids, limit=15) if seed_ids else []
-        new_ids = set(store.search_by_keywords(rkws, limit=k * 3, tier=tier))
+        new_ids = set(store.search_by_keywords(rkws, limit=k * 3, tier=tier,
+                                               session_id=session_id_filter))
         added = new_ids - kw_ids
         kw_ids.update(new_ids)
         seed_ids = list(added)
@@ -120,13 +126,15 @@ def retrieve_relevant(
             break
 
     # Path F: FTS5 full-text search (within tier)
-    fts_ids = store.fts_search(query, limit=k * 3, tier=tier)
+    fts_ids = store.fts_search(query, limit=k * 3, tier=tier,
+                               session_id=session_id_filter)
     for rank, mid in enumerate(fts_ids):
         path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + rank)
 
     # Query keywords also contribute to keyword path
     query_kws = list(set(expanded.split()[:10]))
-    qkw_ids = store.search_by_keywords(query_kws, limit=k * 3, tier=tier)
+    qkw_ids = store.search_by_keywords(query_kws, limit=k * 3, tier=tier,
+                                       session_id=session_id_filter)
     for rank, mid in enumerate(qkw_ids):
         path_results[mid] = path_results.get(mid, 0.0) + 1.0 / (60 + rank)
 
@@ -137,10 +145,21 @@ def retrieve_relevant(
             if (mem := store.get(mid)) and mem.tag == tag_filter
         }
 
+    # Filter by session (covers ANN path, which has no SQL-level filter).
+    # Legacy memories with empty session_id are kept.
+    if session_id_filter:
+        path_results = {
+            mid: sc for mid, sc in path_results.items()
+            if (mem := store.get(mid)) and mem.session_id in (session_id_filter, "")
+        }
+
     if not path_results:
         all_mems = store.get_all(limit=k * 10)
         if tag_filter:
             all_mems = [m for m in all_mems if m.tag == tag_filter]
+        if session_id_filter:
+            all_mems = [m for m in all_mems
+                        if m.session_id in (session_id_filter, "")]
         return _rank_by_embedding(all_mems, query_embedding, k) if all_mems else []
     else:
         scored = []
@@ -153,7 +172,11 @@ def retrieve_relevant(
             elif mem:
                 scored.append((rrf_score, mem))
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [mem for _, mem in scored[:k]]
+        result = []
+        for sc, mem in scored[:k]:
+            mem.score = sc
+            result.append(mem)
+        return result
 
 
 # ─── Tier Router ──────────────────────────────────────────────────────────────
@@ -165,6 +188,7 @@ def retrieve_tiered(
     query: str,
     store: SQLiteStore,
     k: int = TOP_K,
+    session_id_filter: Optional[str] = None,
 ) -> list[Memory]:
     """Tier-aware retrieval with fill-gap fallback and lazy cold sampling.
 
@@ -180,7 +204,8 @@ def retrieve_tiered(
 
     # Step 1: Hot tier (3-path RRF)
     if store.count_tier("hot") > 0:
-        hot_results = retrieve_relevant(query, store, k=k, tier="hot")
+        hot_results = retrieve_relevant(query, store, k=k, tier="hot",
+                                        session_id_filter=session_id_filter)
         seen_ids = set(m.id for m in hot_results)
         all_results.extend(hot_results)
     else:
@@ -189,7 +214,8 @@ def retrieve_tiered(
     # Step 2: Fill gap from warm tier (2-path RRF, no ANN)
     if len(all_results) < k and store.count_tier("warm") > 0:
         needed = k - len(all_results)
-        warm_results = retrieve_relevant(query, store, k=needed, tier="warm")
+        warm_results = retrieve_relevant(query, store, k=needed, tier="warm",
+                                         session_id_filter=session_id_filter)
         for m in warm_results:
             if m.id not in seen_ids and len(all_results) < k:
                 all_results.append(m)
@@ -199,7 +225,8 @@ def retrieve_tiered(
     if len(all_results) < k and store.count_tier("cold") > 0:
         needed = k - len(all_results)
         warm_capacity = WARM_CAPACITY - store.count_tier("warm")
-        cold_results = retrieve_relevant(query, store, k=needed, tier="cold")
+        cold_results = retrieve_relevant(query, store, k=needed, tier="cold",
+                                         session_id_filter=session_id_filter)
         for m in cold_results:
             if m.id not in seen_ids and len(all_results) < k:
                 all_results.append(m)

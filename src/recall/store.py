@@ -35,6 +35,7 @@ class Memory:
     tier: str = "hot"  # hot / warm / cold
     last_accessed_at: Optional[datetime] = None
     last_demoted_at: Optional[datetime] = None
+    score: float = 0.0  # retrieval score (filled by retrieve_relevant, not persisted)
 
 
 # ─── Keyword extraction ───────────────────────────────────────────────────────
@@ -566,15 +567,23 @@ class SQLiteStore:
     # ─── Query helpers ─────────────────────────────────────────────────────────
 
     def search_by_keywords(self, keywords: list[str], limit: int = 20,
-                           tier: Optional[str] = None) -> list[str]:
+                           tier: Optional[str] = None,
+                           session_id: Optional[str] = None) -> list[str]:
         if not keywords:
             return []
         ph = ",".join("?" for _ in keywords)
-        params = list(keywords)
+        params: list = list(keywords)
+        conds = [f"k.keyword IN ({ph})"]
         if tier:
-            q = f"SELECT DISTINCT k.memory_id FROM keywords k"
-            q += f" JOIN memories m ON k.memory_id=m.id WHERE m.tier=? AND k.keyword IN ({ph})"
+            conds.insert(0, "m.tier=?")
             params.insert(0, tier)
+        if session_id:
+            # legacy rows with empty/NULL session_id remain visible
+            conds.append("(m.session_id=? OR m.session_id='' OR m.session_id IS NULL)")
+            params.append(session_id)
+        if tier or session_id:
+            q = ("SELECT DISTINCT k.memory_id FROM keywords k "
+                 "JOIN memories m ON k.memory_id=m.id WHERE " + " AND ".join(conds))
         else:
             q = f"SELECT DISTINCT k.memory_id FROM keywords k WHERE k.keyword IN ({ph})"
         q += " LIMIT ?"
@@ -584,19 +593,23 @@ class SQLiteStore:
         return [r[0] for r in rows]
 
     def fts_search(self, query: str, limit: int = 20,
-                   tier: Optional[str] = None) -> list[str]:
+                   tier: Optional[str] = None,
+                   session_id: Optional[str] = None) -> list[str]:
         try:
             with sqlite3.connect(self.db_path, timeout=30.0) as conn:
                 safe = " ".join(f'"{w}"' for w in query.split() if len(w) > 2)
                 if not safe:
                     return []
-                params = [safe]
+                params: list = []
                 q = "SELECT m.id FROM memories_fts f JOIN memories m ON f.id=m.id WHERE"
                 if tier:
                     q += " m.tier=? AND"
-                    params.insert(0, tier)
+                    params.append(tier)
+                if session_id:
+                    q += " (m.session_id=? OR m.session_id='' OR m.session_id IS NULL) AND"
+                    params.append(session_id)
                 q += " memories_fts MATCH ? LIMIT ?"
-                params.append(limit)
+                params.extend([safe, limit])
                 rows = conn.execute(q, params).fetchall()
             return [r[0] for r in rows]
         except Exception:
@@ -647,3 +660,4 @@ class SQLiteStore:
             last_accessed_at=datetime.fromisoformat(d["last_accessed_at"]) if d["last_accessed_at"] else None,
             last_demoted_at=datetime.fromisoformat(d["last_demoted_at"]) if d["last_demoted_at"] else None,
         )
+# end of store.py
