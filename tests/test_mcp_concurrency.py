@@ -7,6 +7,7 @@ is to prove the transactional guarantees under genuine contention.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import subprocess
@@ -848,3 +849,318 @@ def test_cross_owner_writes_fail_closed_without_side_effects(tmp_path: Path) -> 
             payload_digest="digest-a-into-b",
         )
     assert _full_snapshot(db_path) == before
+
+
+# --------------------------------------------------------------------------
+# 1.20 pure search vs concurrent replace/remove:
+#      no lost update, no torn read, no tier/index drift
+# --------------------------------------------------------------------------
+
+PURITY_MEMORY = "memory-read-purity"
+PURITY_TOKEN = "purityprobe"
+PURITY_REPLACES = 12
+
+
+def _purity_content(revision: int) -> str:
+    """Deterministic content per revision, always FTS-matchable on the token."""
+
+    return (
+        f"{PURITY_TOKEN} revision {revision} DecisionRecord about "
+        f"read-purity under concurrent replace-and-remove pressure."
+    )
+
+
+def _purity_occurred_at(revision: int) -> str:
+    return f"2026-08-03T0{revision // 60}:{revision % 60:02d}:00+00:00"
+
+
+def _seed_purity(db_path: Path) -> None:
+    _add(
+        RecallMCPRepository(db_path),
+        memory_id=PURITY_MEMORY,
+        idempotency_key="key-purity-add",
+        payload_digest="digest-purity-add",
+        content=_purity_content(1),
+        occurred_at=_purity_occurred_at(1),
+    )
+
+
+def _purity_writer(db_path: Path, replaces: int = PURITY_REPLACES) -> int:
+    """Run ``replaces`` CAS replaces; returns the final revision."""
+
+    revision = 1
+    for step in range(replaces):
+        next_revision = revision + 1
+        _replace(
+            RecallMCPRepository(db_path),
+            memory_id=PURITY_MEMORY,
+            expected_revision=revision,
+            idempotency_key=f"key-purity-replace-{step}",
+            payload_digest=f"digest-purity-replace-{step}",
+            content=_purity_content(next_revision),
+            occurred_at=_purity_occurred_at(next_revision),
+        )
+        revision = next_revision
+    return revision
+
+
+def _purity_reader(db_path: Path, stop: threading.Event) -> list[tuple]:
+    """Pure reads only, looping until the writer signals completion."""
+
+    observations: list[tuple] = []
+    repository = RecallMCPRepository(db_path)
+    while not stop.is_set():
+        for result in repository.search_scoped(
+            grant_id=WRITE_GRANT_ID, scope=SCOPE, query=PURITY_TOKEN
+        ):
+            observations.append(
+                (
+                    "search",
+                    result.memory_id,
+                    result.revision,
+                    result.content,
+                    result.content_hash,
+                )
+            )
+        direct = repository.get_scoped_memory(
+            grant_id=WRITE_GRANT_ID, scope=SCOPE, memory_id=PURITY_MEMORY
+        )
+        if direct is not None:
+            observations.append(
+                (
+                    "get",
+                    direct.memory_id,
+                    direct.revision,
+                    direct.content,
+                    direct.content_hash,
+                )
+            )
+        for result in repository.recent_scoped_memories(
+            grant_id=WRITE_GRANT_ID, scope=SCOPE
+        ):
+            observations.append(
+                (
+                    "recent",
+                    result.memory_id,
+                    result.revision,
+                    result.content,
+                    result.content_hash,
+                )
+            )
+    return observations
+
+
+def _run_reader_against_writer(db_path: Path, writer):
+    """Run ``writer()`` while a pure-read loop hammers the same authority."""
+
+    stop = threading.Event()
+    observations: list[tuple] = []
+    reader_error: list[BaseException] = []
+
+    def reader_target() -> None:
+        try:
+            observations.extend(_purity_reader(db_path, stop))
+        except BaseException as exc:  # noqa: BLE001 - surfaced in assertions
+            reader_error.append(exc)
+            stop.set()
+
+    reader = threading.Thread(target=reader_target)
+    reader.start()
+    try:
+        writer_result = writer()
+    finally:
+        stop.set()
+        reader.join(timeout=90)
+
+    assert not reader.is_alive(), "reader thread deadlocked"
+    assert not reader_error, reader_error
+    return writer_result, observations
+
+
+def test_pure_search_never_observes_a_torn_state_and_the_writer_loses_nothing(
+    tmp_path: Path,
+) -> None:
+    db_path = _authority(tmp_path, "read-purity")
+    _seed_purity(db_path)
+
+    final_revision, observations = _run_reader_against_writer(
+        db_path, lambda: _purity_writer(db_path)
+    )
+
+    assert final_revision == PURITY_REPLACES + 1
+    assert observations, "the reader never observed the memory"
+
+    seen_revisions = set()
+    for kind, memory_id, revision, content, content_hash in observations:
+        assert memory_id == PURITY_MEMORY, kind
+        # Every observation must be a *committed* state, never a mix of new
+        # content with an old revision or a hash that does not match.
+        assert 1 <= revision <= final_revision, (kind, revision)
+        assert content == _purity_content(revision), (kind, revision)
+        assert content_hash == hashlib.sha256(content.encode("utf-8")).hexdigest()
+        seen_revisions.add(revision)
+
+    # Prove the reads really interleaved with the writes rather than all
+    # landing before or after the writer ran.
+    assert len(seen_revisions) >= 2, sorted(seen_revisions)
+
+    # No lost update: exactly one add + PURITY_REPLACES replaces committed.
+    with sqlite3.connect(db_path) as conn:
+        revision, updated_at = conn.execute(
+            "SELECT revision, updated_at FROM memory_metadata WHERE memory_id = ?",
+            (PURITY_MEMORY,),
+        ).fetchone()
+        events = conn.execute(
+            "SELECT revision, operation FROM memory_events "
+            "WHERE memory_id = ? ORDER BY revision",
+            (PURITY_MEMORY,),
+        ).fetchall()
+    assert revision == final_revision
+    assert updated_at == _purity_occurred_at(final_revision)
+    assert [row[0] for row in events] == list(range(1, final_revision + 1))
+    assert [row[1] for row in events] == ["add"] + ["replace"] * PURITY_REPLACES
+
+
+def test_concurrent_pure_search_leaves_the_authority_byte_identical(
+    tmp_path: Path,
+) -> None:
+    """Read purity: the same writer sequence, with and without readers.
+
+    ``mcp_repository`` derives every timestamp from caller-supplied
+    ``occurred_at`` values (no clock, no uuid), so two identical write
+    sequences must produce identical databases.  Any write performed by the
+    "pure" read path -- an access counter, a tier demotion, an FTS rebuild --
+    would break the equality.
+    """
+
+    quiet_db = _authority(tmp_path, "purity-quiet")
+    noisy_db = _authority(tmp_path, "purity-noisy")
+    _seed_purity(quiet_db)
+    _seed_purity(noisy_db)
+
+    quiet_revision = _purity_writer(quiet_db)
+    noisy_revision, observations = _run_reader_against_writer(
+        noisy_db, lambda: _purity_writer(noisy_db)
+    )
+
+    assert quiet_revision == noisy_revision
+    assert observations
+    assert _full_snapshot(noisy_db) == _full_snapshot(quiet_db)
+
+    # The legacy hot/cold machinery must not have been touched by reads.
+    with sqlite3.connect(noisy_db) as conn:
+        tier, access_count, last_accessed_at, last_demoted_at = conn.execute(
+            "SELECT tier, access_count, last_accessed_at, last_demoted_at "
+            "FROM memories WHERE id = ?",
+            (PURITY_MEMORY,),
+        ).fetchone()
+    assert tier == "hot"
+    assert access_count == 0
+    assert last_accessed_at is None
+    assert last_demoted_at is None
+
+
+def test_index_parity_holds_after_concurrent_reads_and_writes(tmp_path: Path) -> None:
+    db_path = _authority(tmp_path, "purity-index")
+    _seed_purity(db_path)
+    final_revision, _ = _run_reader_against_writer(
+        db_path, lambda: _purity_writer(db_path)
+    )
+    final_content = _purity_content(final_revision)
+
+    from recall.store import extract_keywords
+
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT content FROM memories WHERE id = ?", (PURITY_MEMORY,)
+        ).fetchone() == (final_content,)
+
+        fts_rows = conn.execute(
+            "SELECT content FROM memories_fts WHERE id = ?", (PURITY_MEMORY,)
+        ).fetchall()
+        assert fts_rows == [(final_content,)], "FTS index drifted from memories"
+
+        keywords = sorted(
+            row[0]
+            for row in conn.execute(
+                "SELECT keyword FROM keywords WHERE memory_id = ?", (PURITY_MEMORY,)
+            ).fetchall()
+        )
+        assert keywords == sorted(
+            {keyword.lower() for keyword in extract_keywords(final_content)}
+        )
+
+        assert conn.execute(
+            "SELECT content_hash FROM memory_metadata WHERE memory_id = ?",
+            (PURITY_MEMORY,),
+        ).fetchone() == (hashlib.sha256(final_content.encode("utf-8")).hexdigest(),)
+
+        embeddings = conn.execute(
+            "SELECT generation, embedding_blob FROM memory_embeddings "
+            "WHERE memory_id = ? ORDER BY generation",
+            (PURITY_MEMORY,),
+        ).fetchall()
+        assert embeddings == [(1, b"replaced-generation-vector")]
+
+        assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        # FTS5 self-check: raises sqlite3.DatabaseError on index corruption.
+        conn.execute("INSERT INTO memories_fts(memories_fts) VALUES('integrity-check')")
+
+
+def test_search_during_remove_never_returns_a_tombstoned_memory(
+    tmp_path: Path,
+) -> None:
+    db_path = _authority(tmp_path, "purity-remove")
+    _seed_purity(db_path)
+
+    def writer() -> int:
+        revision = _purity_writer(db_path, replaces=6)
+        _remove(
+            RecallMCPRepository(db_path),
+            memory_id=PURITY_MEMORY,
+            expected_revision=revision,
+            idempotency_key="key-purity-remove",
+            payload_digest="digest-purity-remove",
+            occurred_at=_purity_occurred_at(revision + 1),
+        )
+        return revision + 1
+
+    final_revision, observations = _run_reader_against_writer(db_path, writer)
+    assert final_revision == 8
+
+    # Visibility is monotonic: the tombstone revision itself is never visible
+    # and the memory never reappears (no stale index resurrection).
+    for _kind, _memory_id, revision, content, content_hash in observations:
+        assert revision <= final_revision - 1, "a tombstoned revision was returned"
+        assert content == _purity_content(revision)
+        assert content_hash == hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    repository = RecallMCPRepository(db_path)
+    assert (
+        repository.search_scoped(
+            grant_id=WRITE_GRANT_ID, scope=SCOPE, query=PURITY_TOKEN
+        )
+        == ()
+    )
+    assert (
+        repository.get_scoped_memory(
+            grant_id=WRITE_GRANT_ID, scope=SCOPE, memory_id=PURITY_MEMORY
+        )
+        is None
+    )
+    assert (
+        repository.recent_scoped_memories(grant_id=WRITE_GRANT_ID, scope=SCOPE) == ()
+    )
+
+    # Soft delete stays reversible: the rows survive, only visibility changed.
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE id = ?", (PURITY_MEMORY,)
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM memories_fts WHERE id = ?", (PURITY_MEMORY,)
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT deleted_at FROM memory_metadata WHERE memory_id = ?",
+            (PURITY_MEMORY,),
+        ).fetchone() == (_purity_occurred_at(final_revision),)

@@ -54,11 +54,11 @@
 - [x] 1.16 驗兩個replace使用同expected_revision只有一個成功。
 - [x] 1.17 驗server restart後idempotency仍成立。
 - [x] 1.17a 驗idempotency lookup前先做current auth：revoked/unlinked grant、scope downgrade、wrong owner以舊key replay皆回統一not-authorized、零內容／零key-existence洩漏／零side effect。
-- [ ] 1.18 實作OS-backed authority DB ownership lock；第二個process fail closed，crash後OS自動釋放且新process可安全接管；不得用PID file刪除當互斥鎖。
+- [x] 1.18 實作OS-backed authority DB ownership lock；第二個process fail closed，crash後OS自動釋放且新process可安全接管；不得用PID file刪除當互斥鎖。
 - [x] 1.19 以兩個owner、三個grant測cross-owner/cross-scope ID guessing、search、replace、remove皆fail closed。
-- [ ] 1.20 測pure search與replace/remove並行不造成lost update、tier/index drift。
+- [x] 1.20 測pure search與replace/remove並行不造成lost update、tier/index drift。
 
-Run：`python -m pytest -q tests/test_mcp_schema_migration.py tests/test_mcp_repository.py tests/test_mcp_concurrency.py`
+Run：`python -m pytest -q tests/test_mcp_schema_migration.py tests/test_mcp_repository.py tests/test_mcp_concurrency.py tests/test_authority_lock.py`
 
 **Gate 1:** migration、transaction、index parity、concurrency全PASS；maker ≠ grader審查schema與data-loss風險。
 
