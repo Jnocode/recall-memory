@@ -192,6 +192,7 @@ class RecallMCPRepository:
         *,
         owner_id: str,
         grant_id: str,
+        scope: str,
         operation: str,
         idempotency_key: str,
         payload_digest: str,
@@ -199,9 +200,14 @@ class RecallMCPRepository:
         """Return the replayable result for a key, or fail closed.
 
         Callers MUST have already validated the current grant, so reaching this
-        method already proves the caller is authorized right now.  The lookup is
-        intentionally not restricted to ``operation`` so that a purged deny
-        tombstone written by any operation blocks every replay of the same key.
+        method already proves the caller is authorized right now.  The lookup
+        additionally requires the stored ``scope`` to match the *current*
+        request scope — after a scope downgrade the old key must not replay a
+        result belonging to a scope the grant can no longer reach (R5.10).
+
+        The lookup is intentionally not restricted to ``operation`` so that a
+        purged deny tombstone written by any operation blocks every replay of
+        the same key.
 
         Returns ``None`` when the key has never been committed.
         """
@@ -211,8 +217,9 @@ class RecallMCPRepository:
             SELECT result_json, purged_at, memory_id, operation, payload_digest
             FROM mcp_idempotency
             WHERE owner_id = ? AND grant_id = ? AND idempotency_key = ?
+                  AND scope = ?
             """,
-            (owner_id, grant_id, idempotency_key),
+            (owner_id, grant_id, idempotency_key, scope),
         ).fetchone()
         if row is None:
             return None
@@ -313,6 +320,7 @@ class RecallMCPRepository:
                 conn,
                 owner_id=owner_id,
                 grant_id=grant_id,
+                scope=scope,
                 operation="add",
                 idempotency_key=idempotency_key,
                 payload_digest=payload_digest,
@@ -621,6 +629,7 @@ class RecallMCPRepository:
                 conn,
                 owner_id=owner_id,
                 grant_id=grant_id,
+                scope=scope,
                 operation="replace",
                 idempotency_key=idempotency_key,
                 payload_digest=payload_digest,
@@ -1328,6 +1337,7 @@ class RecallMCPRepository:
                 conn,
                 owner_id=owner_id,
                 grant_id=grant_id,
+                scope=scope,
                 operation="remove",
                 idempotency_key=idempotency_key,
                 payload_digest=payload_digest,
@@ -1507,6 +1517,7 @@ class RecallMCPRepository:
                 conn,
                 owner_id=owner_id,
                 grant_id=grant_id,
+                scope=scope,
                 operation="restore",
                 idempotency_key=idempotency_key,
                 payload_digest=payload_digest,

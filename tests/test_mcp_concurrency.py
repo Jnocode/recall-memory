@@ -714,6 +714,182 @@ def test_replay_runs_current_authorization_before_idempotency_lookup(
 
 
 # --------------------------------------------------------------------------
+# 1.17a (addendum) partial scope downgrade — keep one scope, lose another
+# The original parametrised test uses a *fully disjoint* replacement
+# (["project:unrelated"]) so the grant SELECT rejects before idempotency
+# is ever reached.  This test covers the realistic OAuth re-consent shape:
+# the grant still has a *different* valid scope but has lost the one the
+# original add was written under.
+# --------------------------------------------------------------------------
+
+
+def _partial_downgrade_scope(db_path: Path) -> None:
+    """Remove project:recall from patterns but keep 'global'.
+
+    Also create an embedding profile for the global scope so that add_memory
+    succeeds under the surviving scope.
+    """
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            "UPDATE client_grants SET memory_scope_patterns_json = ? WHERE grant_id = ?",
+            ('["global"]', WRITE_GRANT_ID),
+        )
+        # The write grant's owner_id comes from BOOTSTRAP — look it up.
+        owner_id = conn.execute(
+            "SELECT owner_id FROM client_grants WHERE grant_id = ?",
+            (WRITE_GRANT_ID,),
+        ).fetchone()[0]
+        # Create an embedding profile for the global scope if it doesn't exist.
+        existing = conn.execute(
+            "SELECT 1 FROM embedding_profiles WHERE owner_id = ? AND scope = ? AND status = 'ACTIVE'",
+            (owner_id, "global"),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """
+                INSERT INTO embedding_profiles (
+                    owner_id, scope, generation, provider,
+                    endpoint_identity_hash, model, dimension, status,
+                    created_at, activated_at, retired_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_id,
+                    "global",
+                    1,
+                    "test-provider",
+                    "endpoint-identity-digest",
+                    "test-embedding-model",
+                    2,
+                    "ACTIVE",
+                    "2026-08-02T05:00:00+00:00",
+                    "2026-08-02T05:00:00+00:00",
+                    None,
+                ),
+            )
+
+
+def test_partial_scope_downgrade_blocks_idempotency_replay(
+    tmp_path: Path,
+) -> None:
+    """After losing project:recall but keeping global, replaying the old
+    idempotency key under scope='global' must NOT return the cached
+    project:recall result.
+
+    Before the fix (AND scope=? in _resolve_idempotency), this replay would
+    succeed and leak the memory_id, revision and created_at of a memory
+    belonging to a scope the grant can no longer reach.
+    """
+    db_path = _authority(tmp_path, "partial-downgrade")
+    repository = RecallMCPRepository(db_path)
+    memory_id = "memory-partial-downgrade"
+    secret = "Committed content under project:recall scope."
+
+    # Widen the write grant to cover both project:recall AND global, then
+    # create an embedding profile for global.  The authority starts with only
+    # project:recall in the grant's patterns.
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute(
+            "UPDATE client_grants SET memory_scope_patterns_json = ? WHERE grant_id = ?",
+            ('["project:recall","global"]', WRITE_GRANT_ID),
+        )
+        owner_id = conn.execute(
+            "SELECT owner_id FROM client_grants WHERE grant_id = ?",
+            (WRITE_GRANT_ID,),
+        ).fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO embedding_profiles (
+                owner_id, scope, generation, provider,
+                endpoint_identity_hash, model, dimension, status,
+                created_at, activated_at, retired_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                owner_id, "global", 1, "test-provider",
+                "endpoint-identity-digest", "test-embedding-model",
+                2, "ACTIVE", "2026-08-02T05:00:00+00:00",
+                "2026-08-02T05:00:00+00:00", None,
+            ),
+        )
+
+    # Step 1: add a memory under scope="project:recall" with key="K-partial".
+    result = _add(
+        repository,
+        memory_id=memory_id,
+        idempotency_key="K-partial",
+        payload_digest="digest-partial",
+        content=secret,
+        scope="project:recall",
+    )
+    assert result.memory_id == memory_id
+    assert result.revision == 1
+
+    # Step 2: partial scope downgrade — lose project:recall, keep global.
+    _partial_downgrade_scope(db_path)
+    before = _full_snapshot(db_path)
+
+    # Step 3: same idempotency key, but presented under scope="global"
+    # (which the grant still has).  This must NOT replay the old result.
+    #
+    # With the fix, the repository treats this as a fresh key (None) because
+    # the scope column doesn't match.  Then the INSERT into mcp_idempotency
+    # hits the PK constraint (grant_id, operation, idempotency_key) — this is
+    # correct fail-closed behavior: the key is already consumed and a different
+    # scope cannot reclaim it.  The critical invariant is that the *old*
+    # cached result (memory_id, revision) is never returned.
+
+    # --- replay via add with same key but scope='global' ---
+    # Must NOT succeed and must NOT return the old memory_id.
+    with pytest.raises(Exception) as exc_info:
+        _add(
+            repository,
+            memory_id="memory-partial-new",  # different id to avoid PK collision
+            idempotency_key="K-partial",
+            payload_digest="digest-partial",
+            content="New content under global scope.",
+            scope="global",
+        )
+    # The failure must not be a successful replay — it should be an integrity
+    # error (the key is consumed) or an IdempotencyKeyReusedError.
+    # Most importantly, we must NOT get back the old memory_id.
+    error_str = str(exc_info.value)
+    assert memory_id not in error_str, (
+        f"old memory_id leaked in error: {error_str}"
+    )
+    assert secret not in error_str, (
+        f"old content leaked in error: {error_str}"
+    )
+
+    # Also verify: replaying the exact same key+scope under the revoked scope
+    # fails closed with PermissionError (grant doesn't cover project:recall).
+    with pytest.raises(PermissionError):
+        _add(
+            repository,
+            memory_id=memory_id,
+            idempotency_key="K-partial",
+            payload_digest="digest-partial",
+            content=secret,
+            scope="project:recall",
+        )
+
+    # Final: a completely fresh key under global DOES work — only the old
+    # key is blocked.
+    fresh_result = _add(
+        repository,
+        memory_id="memory-fresh-global",
+        idempotency_key="K-fresh-global",
+        payload_digest="digest-fresh-global",
+        content="Fresh content under global scope.",
+        scope="global",
+    )
+    assert fresh_result.memory_id == "memory-fresh-global"
+    assert fresh_result.revision == 1
+
+
+# --------------------------------------------------------------------------
 # 1.19 two owners, three grants: cross-owner/cross-scope access fails closed
 # --------------------------------------------------------------------------
 
