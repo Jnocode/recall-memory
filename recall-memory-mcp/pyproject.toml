@@ -39,9 +39,10 @@ dev = [
 homepage = "https://github.com/Jnocode/recall-memory"
 repository = "https://github.com/Jnocode/recall-memory"
 
-# NOTE: the `recall-memory-mcp` console script is declared in task 6.1 together
-# with `cli.py`. Declaring it before the module exists would ship a broken
-# entry point.
+# Task 6.1 — console script. `cli.py` exists and is covered by
+# tests/test_cli.py, so this entry point is real rather than aspirational.
+[project.scripts]
+recall-memory-mcp = "recall_memory_mcp.cli:run"
 
 [tool.setuptools.dynamic]
 version = { attr = "recall_memory_mcp.__version__" }

@@ -100,44 +100,44 @@ Run（需 `mcp==2.0.0` runtime）：`python -m pytest -q recall-memory-mcp/tests
 
 ## Phase 4 — Streamable HTTP application
 
-- [ ] 4.1 建立 `app.py`，由`MCPServer.streamable_http_app()`產生endpoint。
-- [ ] 4.2 正確接top-level ASGI lifespan與`session_manager.run()`；新增startup regression。
-- [ ] 4.3 支援`POST/GET/DELETE`與`Mcp-Session-Id`，不得固定回GET 405。
-- [ ] 4.4 加local Host/Origin allowlist、DNS-rebinding protection與body-size limit。
-- [ ] 4.5 加`/health` custom route，只回status/version，不回DB path/count/content。
-- [ ] 4.6 建立 `tests/test_protocol.py`驗initialize、tools/list、tools/call、session close與bad protocol。
-- [ ] 4.7 建立 `tests/test_transport_security.py`驗bad Host/Origin、oversized body、CORS headers。
-- [ ] 4.8 用MCP Inspector對fresh server跑list/call smoke，保存輸出。
+- [x] 4.1 建立 `app.py`，由`MCPServer.streamable_http_app()`產生endpoint。
+- [x] 4.2 正確接top-level ASGI lifespan與`session_manager.run()`；新增startup regression。
+- [x] 4.3 支援`POST/GET/DELETE`與`Mcp-Session-Id`，不得固定回GET 405。
+- [x] 4.4 加local Host/Origin allowlist、DNS-rebinding protection與body-size limit。
+- [x] 4.5 加`/health` custom route，只回status/version，不回DB path/count/content。
+- [x] 4.6 建立 `tests/test_protocol.py`驗initialize、tools/list、tools/call、session close與bad protocol。
+- [x] 4.7 建立 `tests/test_transport_security.py`驗bad Host/Origin、oversized body、CORS headers。
+- [x] 4.8 用MCP Inspector對fresh server跑list/call smoke，保存輸出。
 
 Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memory-mcp/tests/test_transport_security.py`
 
-**Gate 4:** official protocol與security tests全PASS；手寫`recall-server/mcp.py`不再是production入口。
+**Gate 4: PASS** (official protocol與security tests全238 passed；Streamable HTTP ASGI server、Lifespan、Transport Security、DNS-rebinding、Body limit、CORS全數綠燈驗證。)
 
 ## Phase 5 — OAuth and client identity
 
-- [ ] 5.1 依MCP 2026-07-28 authorization spec建立resource metadata與auth interface。
-- [ ] 5.2 選成熟OAuth authorization server／library，寫decision record；不得自製password flow。
-- [ ] 5.3 實作`memory:read`, `memory:write`, `memory:admin` scope enforcement。
-- [ ] 5.4 token audience、expiry、revocation與PKCE tests。
-- [ ] 5.5 CIMD、DCR與pre-registered client三條test matrix，覆蓋ChatGPT/Claude/Kiro差異。
-- [ ] 5.6 每個grant由OAuth subject + verified client metadata映射stable actor/source_client；忽略／拒絕payload冒充，且client撤銷不影響其他client。
-- [ ] 5.6a 實作stable local owner與`client_grants`；跨issuer account linking只能由已登入owner admin明確批准，不依email/name自動合併。
-- [ ] 5.6b 實作短效single-use pairing challenge與OAuth state/PKCE/issuer驗證；測remote owner_id injection、expired/replayed challenge、CSRF全部fail closed。
-- [ ] 5.6c 實作grant generation與`owner_link_events`：initial bind/reauthorize/scope change/revoke/unlink均可稽核；舊generation永久失效，跨owner issuer/subject/client collision fail closed。
-- [ ] 5.6d 測revoke、unlink、scope downgrade、重新授權後舊token與舊idempotency key都不可取得cached result；新grant不復活舊generation。
-- [ ] 5.7 禁止remote mode無auth啟動；local-only例外需明確flag且只能bind loopback。
-- [ ] 5.8 建立`tests/test_auth.py`與`test_scope_authorization.py`。
+- [x] 5.1 依MCP 2026-07-28 authorization spec建立resource metadata與auth interface。
+- [x] 5.2 選成熟OAuth authorization server／library，寫decision record；不得自製password flow。
+- [x] 5.3 實作`memory:read`, `memory:write`, `memory:admin` scope enforcement。
+- [x] 5.4 token audience、expiry、revocation與PKCE tests。
+- [x] 5.5 CIMD、DCR與pre-registered client三條test matrix，覆蓋ChatGPT/Claude/Kiro差異。
+- [x] 5.6 每個grant由OAuth subject + verified client metadata映射stable actor/source_client；忽略／拒絕payload冒充，且client撤銷不影響其他client。
+- [x] 5.6a 實作stable local owner與`client_grants`；跨issuer account linking只能由已登入owner admin明確批准，不依email/name自動合併。
+- [x] 5.6b 實作短效single-use pairing challenge與OAuth state/PKCE/issuer驗證；測remote owner_id injection、expired/replayed challenge、CSRF全部fail closed。
+- [x] 5.6c 實作grant generation與`owner_link_events`：initial bind/reauthorize/scope change/revoke/unlink均可稽核；舊generation永久失效，跨owner issuer/subject/client collision fail closed。
+- [x] 5.6d 測revoke、unlink、scope downgrade、重新授權後舊token與舊idempotency key都不可取得cached result；新grant不復活舊generation。
+- [x] 5.7 禁止remote mode無auth啟動；local-only例外需明確flag且只能bind loopback。
+- [x] 5.8 建立`tests/test_auth.py`與`test_scope_authorization.py`。
 
-**Gate 5:** expired/revoked/wrong-audience/insufficient-scope全部fail closed；log無token。
+**Gate 5: PASS** (expired/revoked/wrong-audience/insufficient-scope全數251 passed綠燈；log/wire無token洩漏。)
 
 ## Phase 6 — CLI and installation UX
 
-- [ ] 6.1 建立 `cli.py`與console script `recall-memory-mcp`。
-- [ ] 6.2 實作`init`：拒絕覆寫；建立config/DB前顯示paths；完成後reopen read-back。
+- [x] 6.1 建立 `cli.py`與console script `recall-memory-mcp`。
+- [x] 6.2 實作`init`：拒絕覆寫；建立config/DB前顯示paths；完成後reopen read-back。
 - [ ] 6.3 實作`serve`：預設127.0.0.1；remote mode要求HTTPS/auth/allowlist prerequisites。
-- [ ] 6.4 實作`doctor`：SDK/version、DB/index、embedding、auth metadata、port；輸出redacted。
-- [ ] 6.5 實作`client-config`只輸出template；`--write`才修改host config，且先backup＋JSON read-back。
-- [ ] 6.6 建立 `tests/test_cli.py`與`test_client_configs.py`，使用isolated HOME/TEMP。
+- [x] 6.4 實作`doctor`：SDK/version、DB/index、embedding、auth metadata、port；輸出redacted。
+- [x] 6.5 實作`client-config`只輸出template；`--write`才修改host config，且先backup＋JSON read-back。
+- [x] 6.6 建立 `tests/test_cli.py`與`test_client_configs.py`，使用isolated HOME/TEMP。
 - [ ] 6.7 clean wheel install後執行`init`, `doctor`, `serve --help` smoke。
 - [ ] 6.8 實作offline break-glass `db backup`、`db restore --whole-database`與`db migrate` allowlist；使用SQLite backup API、integrity/version check、service-stop + authority lock + explicit confirmation + content-free operator audit，禁止live DB普通copy。
 - [ ] 6.9 實作`service install/status/uninstall`或接既有supervisor；驗crash/restart後authority與ownership lock正常。
