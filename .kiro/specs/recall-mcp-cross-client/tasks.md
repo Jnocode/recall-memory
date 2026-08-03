@@ -64,14 +64,14 @@ Run：`python -m pytest -q tests/test_mcp_schema_migration.py tests/test_mcp_rep
 
 ## Phase 2 — New MCP distribution skeleton
 
-- [ ] 2.1 建立 `recall-memory-mcp/pyproject.toml`，distribution=`recall-memory-mcp`，import=`recall_memory_mcp`。
-- [ ] 2.2 Pin `mcp>=2.0,<2.1`與compatible `recall-sqlite`版本；不得依賴未發布的`recall-core`。
-- [ ] 2.3 建立 `recall-memory-mcp/src/recall_memory_mcp/__init__.py`與單一version source。
-- [ ] 2.4 建立 `models.py`的strict request/result types與length/range constraints。
-- [ ] 2.5 建立 `settings.py`：預設localhost、DB/config paths、host/origin allowlist；repr/dump redacted。
-- [ ] 2.6 建立 `redaction.py`並測試token、Bearer、URL credentials、Windows paths與traceback不外洩。
-- [ ] 2.7 建立 `service.py`，只依賴repository protocol，不依賴MCP transport。
-- [ ] 2.8 建立`tests/test_models.py`, `test_settings.py`, `test_redaction.py`, `test_service.py`。
+- [x] 2.1 建立 `recall-memory-mcp/pyproject.toml`，distribution=`recall-memory-mcp`，import=`recall_memory_mcp`。
+- [x] 2.2 Pin `mcp>=2.0,<2.1`與compatible `recall-sqlite`版本；不得依賴未發布的`recall-core`。
+- [x] 2.3 建立 `recall-memory-mcp/src/recall_memory_mcp/__init__.py`與單一version source。
+- [x] 2.4 建立 `models.py`的strict request/result types與length/range constraints。
+- [x] 2.5 建立 `settings.py`：預設localhost、DB/config paths、host/origin allowlist；repr/dump redacted。
+- [x] 2.6 建立 `redaction.py`並測試token、Bearer、URL credentials、Windows paths與traceback不外洩。
+- [x] 2.7 建立 `service.py`，只依賴repository protocol，不依賴MCP transport。
+- [x] 2.8 建立`tests/test_models.py`, `test_settings.py`, `test_redaction.py`, `test_service.py`。
 
 Run：`python -m pytest -q recall-memory-mcp/tests/test_models.py recall-memory-mcp/tests/test_service.py recall-memory-mcp/tests/test_redaction.py`
 

@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recall-memory-mcp"
+description = "Cross-client shared memory for ChatGPT Desktop, Claude Desktop and Kiro over MCP."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+dynamic = ["version"]
+keywords = ["mcp", "model-context-protocol", "memory", "sqlite", "recall"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+
+# Task 2.2 — pinned to the official SDK v2 line (design 6.1) and to the
+# published recall-sqlite core. No dependency on the unpublished
+# `recall-core` tree is permitted.
+dependencies = [
+    "mcp>=2.0,<2.1",
+    "recall-sqlite>=0.2.0,<0.3",
+    "pydantic>=2.7,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.urls]
+homepage = "https://github.com/Jnocode/recall-memory"
+repository = "https://github.com/Jnocode/recall-memory"
+
+# NOTE: the `recall-memory-mcp` console script is declared in task 6.1 together
+# with `cli.py`. Declaring it before the module exists would ship a broken
+# entry point.
+
+[tool.setuptools.dynamic]
+version = { attr = "recall_memory_mcp.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

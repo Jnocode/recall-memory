@@ -6,3 +6,5 @@ __pycache__/
 *.db-shm
 *.db-wal
 *.egg-info/
+recall-memory-mcp/build/
+recall-memory-mcp/dist/
