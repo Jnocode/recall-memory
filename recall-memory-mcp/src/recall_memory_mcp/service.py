@@ -37,6 +37,25 @@ SCOPE_ADMIN = "memory:admin"
 
 _UNIFORM_NOT_AUTHORIZED = "not authorized"
 
+#: Task 3.8 / design 9.1 — an exact count never leaves the server, and a
+#: bucket is only disclosed once the scope is large enough that the bucket
+#: itself cannot identify a specific memory.
+MIN_DIAGNOSTIC_CARDINALITY = 10
+BUCKET_SUPPRESSED = "suppressed"
+BUCKET_SMALL = "10-99"
+BUCKET_LARGE = "100+"
+DIAGNOSTIC_BUCKETS: tuple[str, ...] = (BUCKET_SUPPRESSED, BUCKET_SMALL, BUCKET_LARGE)
+
+
+def cardinality_bucket(count: int) -> str:
+    """Map an exact count to a disclosure-safe bucket label."""
+
+    if count < MIN_DIAGNOSTIC_CARDINALITY:
+        return BUCKET_SUPPRESSED
+    if count < 100:
+        return BUCKET_SMALL
+    return BUCKET_LARGE
+
 
 @dataclass(frozen=True)
 class CallerContext:
@@ -300,7 +319,40 @@ class RecallMemoryService:
             },
             "authorized_scopes": list(ctx.memory_scopes),
         }
+
+        if getattr(payload, "include_diagnostics", False):
+            # R3.8 — diagnostics are owner-admin only and never exact.
+            if SCOPE_ADMIN not in ctx.oauth_scopes:
+                return self._fail(
+                    request_id,
+                    models.ErrorCode.INSUFFICIENT_SCOPE,
+                    f"{SCOPE_ADMIN} is required",
+                    degraded=degraded,
+                )
+            data["diagnostics"] = {
+                "cardinality_buckets": self._cardinality_buckets(ctx),
+                "bucket_threshold": MIN_DIAGNOSTIC_CARDINALITY,
+            }
+
         return self._ok(request_id, data, degraded=degraded)
+
+    def _cardinality_buckets(self, ctx: CallerContext) -> dict[str, str]:
+        counter = getattr(self.repository, "scope_cardinality", None)
+        buckets: dict[str, str] = {}
+        for scope in ctx.memory_scopes:
+            if counter is None:
+                buckets[scope] = BUCKET_SUPPRESSED
+                continue
+            try:
+                count = counter(grant_id=ctx.grant_id, scope=scope)
+            except Exception as exc:  # noqa: BLE001 - diagnostics never crash status
+                logger.warning(
+                    "cardinality probe failed: %s", redaction.redact_exception(exc)
+                )
+                buckets[scope] = BUCKET_SUPPRESSED
+                continue
+            buckets[scope] = cardinality_bucket(int(count))
+        return buckets
 
     # -- write tools ----------------------------------------------------
     def add(
@@ -468,4 +520,16 @@ class RecallMemoryService:
         )
 
 
-__all__ = ["CallerContext", "RecallMemoryService", "SCOPE_ADMIN", "SCOPE_READ", "SCOPE_WRITE"]
+__all__ = [
+    "BUCKET_LARGE",
+    "BUCKET_SMALL",
+    "BUCKET_SUPPRESSED",
+    "DIAGNOSTIC_BUCKETS",
+    "MIN_DIAGNOSTIC_CARDINALITY",
+    "SCOPE_ADMIN",
+    "SCOPE_READ",
+    "SCOPE_WRITE",
+    "CallerContext",
+    "RecallMemoryService",
+    "cardinality_bucket",
+]

@@ -875,6 +875,10 @@ def test_partial_scope_downgrade_blocks_idempotency_replay(
             scope="project:recall",
         )
 
+    # Zero side effect: neither blocked replay attempt may have written a
+    # single row anywhere in the authority database (R5.10 / Task 1.17a).
+    assert _full_snapshot(db_path) == before
+
     # Final: a completely fresh key under global DOES work — only the old
     # key is blocked.
     fresh_result = _add(

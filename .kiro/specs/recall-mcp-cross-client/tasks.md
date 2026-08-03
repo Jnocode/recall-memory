@@ -60,7 +60,8 @@
 
 Run：`python -m pytest -q tests/test_mcp_schema_migration.py tests/test_mcp_repository.py tests/test_mcp_concurrency.py tests/test_authority_lock.py`
 
-**Gate 1:** migration、transaction、index parity、concurrency全PASS；maker ≠ grader審查schema與data-loss風險。
+**Gate 1: PASS** (migration、transaction、index parity、concurrency全PASS；maker ≠ grader審查schema與data-loss風險。)
+
 
 ## Phase 2 — New MCP distribution skeleton
 
@@ -75,25 +76,27 @@ Run：`python -m pytest -q tests/test_mcp_schema_migration.py tests/test_mcp_rep
 
 Run：`python -m pytest -q recall-memory-mcp/tests/test_models.py recall-memory-mcp/tests/test_service.py recall-memory-mcp/tests/test_redaction.py`
 
-**Gate 2:** service可以無network測試；package fresh import成功；無secret預設值。
+**Gate 2: PASS** (service可以無network測試；package fresh import成功；無secret預設值。)
 
 ## Phase 3 — Official MCP SDK v2 server
 
-- [ ] 3.1 建立 `server.py`，使用 `from mcp.server.mcpserver import MCPServer`；不得手寫protocol dispatcher。
-- [ ] 3.2 實作`memory_search`與空query/limit/scope tests。
-- [ ] 3.3 實作`memory_get`與not-found typed error。
-- [ ] 3.4 實作`memory_recent`，禁止空query隱式dump。
-- [ ] 3.5 實作`memory_add`與idempotency annotation/schema。
-- [ ] 3.6 實作`memory_replace`與expected_revision conflict。
-- [ ] 3.7 實作`memory_remove` soft-delete與destructive annotation。
-- [ ] 3.7a 驗三個write tools都把`idempotency_key`列為required；缺值fail closed且不產生side effect。
-- [ ] 3.8 實作`memory_status`，只回redacted capability/health；預設不回exact count，admin diagnostics只回達cardinality門檻的bucket。
-- [ ] 3.9 每個memory result加入provenance、score與`data_trust=untrusted_memory_content`。
-- [ ] 3.10 建立 `tests/test_tools.py`驗tool list、schemas、annotations與structured outputs。
-- [ ] 3.11 用官方SDK client做stdio-free in-process protocol tests。
-- [ ] 3.12 鎖定MVP `stateful Streamable HTTP` capability；若SDK config開啟stateless/json mode，contract test必須失敗。
+- [x] 3.1 建立 `server.py`，使用 `from mcp.server.mcpserver import MCPServer`；不得手寫protocol dispatcher。
+- [x] 3.2 實作`memory_search`與空query/limit/scope tests。
+- [x] 3.3 實作`memory_get`與not-found typed error。
+- [x] 3.4 實作`memory_recent`，禁止空query隱式dump。
+- [x] 3.5 實作`memory_add`與idempotency annotation/schema。
+- [x] 3.6 實作`memory_replace`與expected_revision conflict。
+- [x] 3.7 實作`memory_remove` soft-delete與destructive annotation。
+- [x] 3.7a 驗三個write tools都把`idempotency_key`列為required；缺值fail closed且不產生side effect。
+- [x] 3.8 實作`memory_status`，只回redacted capability/health；預設不回exact count，admin diagnostics只回達cardinality門檻的bucket。
+- [x] 3.9 每個memory result加入provenance、score與`data_trust=untrusted_memory_content`。
+- [x] 3.10 建立 `tests/test_tools.py`驗tool list、schemas、annotations與structured outputs。
+- [x] 3.11 用官方SDK client做stdio-free in-process protocol tests。
+- [x] 3.12 鎖定MVP `stateful Streamable HTTP` capability；若SDK config開啟stateless/json mode，contract test必須失敗。
 
-**Gate 3:** official client可list/call所有tools；raw exception、path、secret均不出wire output。
+Run（需 `mcp==2.0.0` runtime）：`python -m pytest -q recall-memory-mcp/tests/test_tools.py recall-memory-mcp/tests/test_inprocess_protocol.py`
+
+**Gate 3: PASS** (官方 `mcp.client.Client` in-process 對 7 個 tools 全數 list + call 成功；evidence `artifacts/recall-mcp-cross-client/evidence/phase3-tools-list.json` 的 leak scan 命中 0；SDK 自身的 argument-validation 文字由 server middleware 統一改寫，raw exception/path/secret 均不出 wire。)
 
 ## Phase 4 — Streamable HTTP application
 

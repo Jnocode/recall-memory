@@ -193,7 +193,22 @@ class RemoveRequest(_RequestWithExpectedRevision):
 
 
 class StatusRequest(_StrictModel):
-    """No inputs: status must not become a filtered dump surface."""
+    """Status must not become a filtered dump surface (R3.8, design 9.1).
+
+    The single input is a boolean: there is deliberately no scope/query
+    filter, so status cannot be used to probe for the existence of content.
+    ``include_diagnostics`` additionally requires the ``memory:admin`` scope
+    and still only ever answers with coarse cardinality buckets.
+    """
+
+    include_diagnostics: bool = False
+
+    @field_validator("include_diagnostics", mode="before")
+    @classmethod
+    def _strict_bool(cls, value: Any) -> bool:
+        if not isinstance(value, bool):
+            raise ValueError("include_diagnostics must be a boolean")
+        return value
 
 
 REQUEST_MODELS: tuple[str, ...] = (

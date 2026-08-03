@@ -132,6 +132,15 @@ class MemoryRepository(Protocol):
 
     def health(self) -> RepositoryHealth: ...
 
+    def scope_cardinality(self, **kwargs: Any) -> int:
+        """Number of live memories in one authorized scope (task 3.8).
+
+        Optional: an adapter that does not implement it simply makes admin
+        diagnostics unavailable.  The value never leaves the service as an
+        exact number — it is bucketed first.
+        """
+        ...
+
 
 @runtime_checkable
 class Embedder(Protocol):

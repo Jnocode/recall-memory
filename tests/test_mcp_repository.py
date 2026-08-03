@@ -1114,7 +1114,7 @@ def test_purged_memory_replay_raises_purged_memory_replay_error(tmp_path: Path) 
             idempotency_key="idempotency-add-before-purge",
             payload_digest="keyed-payload-digest-add",
             occurred_at="2026-08-02T04:16:00+00:00",
-            embedding_blobs={1: b"vec"},
+            embedding_blobs={1: b"vec1", 2: b"vec2"},
         )
     assert exc_add.value.memory_id == MEMORY_ID
 
