@@ -41,6 +41,7 @@ from . import (
     client_configs,
     provisioning,
     redaction,
+    servicectl,
 )
 from .authority import AuthorityError, AuthorityNotInitialisedError, build_app
 from .settings import LOOPBACK_HOSTS, ServerMode, ServerSettings, SettingsError
@@ -490,11 +491,36 @@ def _cmd_serve(
     except Exception as exc:  # noqa: BLE001
         return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
 
+    # Task 6.9 / design §11: exactly one authority process may own the
+    # database.  The OS lock is taken *before* any transport is opened and
+    # held for the lifetime of this process, so a crash releases it and a
+    # supervisor restart can take over without any cleanup step.
+    try:
+        lock = servicectl.acquire_single_owner(settings.db_path)
+    except servicectl.ServiceAlreadyRunningError as exc:
+        return _fail(err, str(exc), EXIT_REFUSED)
+    except servicectl.ServiceError as exc:
+        return _fail(err, str(exc), EXIT_FAILURE)
+
+    try:
+        return _serve_with_lock(args, settings, app, merged, out, err)
+    finally:
+        lock.release()
+
+
+def _serve_with_lock(
+    args: argparse.Namespace,
+    settings: ServerSettings,
+    app: Any,
+    merged: Mapping[str, str],
+    out: TextIO,
+    err: TextIO,
+) -> int:
     runner = getattr(args, "runner", None)
     if runner is not None:
         out.write(f"starting {PROG} server ({settings.mode.value} mode)...\n")
         try:
-            runner(app, settings, merged)
+            runner(app, settings, dict(merged))
             return EXIT_OK
         except Exception as exc:  # noqa: BLE001
             return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
@@ -644,6 +670,160 @@ def _cmd_db_migrate(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# service — supervisor lifecycle (task 6.9)
+# ---------------------------------------------------------------------------
+
+
+def _service_exit_code(exc: Exception) -> int:
+    """Refusals are exit 3; environment/supervisor failures are exit 1."""
+
+    refusals = (
+        servicectl.ServiceNotInitialisedError,
+        servicectl.UnitRefusedError,
+        servicectl.ForeignUnitError,
+        servicectl.SecretInUnitError,
+        servicectl.ServiceAlreadyRunningError,
+        servicectl.UnsupportedSupervisorError,
+        servicectl.ExecutableNotFoundError,
+    )
+    return EXIT_REFUSED if isinstance(exc, refusals) else EXIT_FAILURE
+
+
+def _service_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    if getattr(args, "supervisor", None):
+        kwargs["supervisor"] = args.supervisor
+    if getattr(args, "unit_path", None):
+        kwargs["unit_path"] = args.unit_path
+    runner = getattr(args, "runner", None)
+    if runner is not None:
+        kwargs["runner"] = runner
+    return kwargs
+
+
+def _emit_commands(commands: Sequence[Sequence[str]], out: TextIO, *, prefix: str) -> None:
+    for argv in commands:
+        out.write(f"  {prefix}: {' '.join(argv)}\n")
+
+
+def _cmd_service_install(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    settings, code = _resolve_db_path(args, env, err)
+    if settings is None:
+        return code
+    try:
+        report = servicectl.install(
+            settings,
+            env=env,
+            executable=args.executable,
+            force=args.force,
+            dry_run=args.dry_run,
+            **_service_kwargs(args),
+        )
+    except servicectl.ServiceError as exc:
+        return _fail(err, str(exc), _service_exit_code(exc))
+    except Exception as exc:  # noqa: BLE001 - never leak a traceback
+        return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
+
+    # Paths are legitimate here: the operator must know which file is (or
+    # would be) created.  `status` stays redacted.
+    out.write(f"{PROG} service install ({report.supervisor})\n")
+    out.write(f"  unit file   : {report.unit_path}\n")
+    if report.dry_run:
+        out.write("  dry run     : nothing was written, nothing was registered\n")
+        _emit_commands(report.commands, out, prefix="would run")
+        out.write("--- unit definition ---\n")
+        out.write(report.unit_text or "")
+        if not (report.unit_text or "").endswith("\n"):
+            out.write("\n")
+        out.write("--- end unit definition ---\n")
+        return EXIT_OK
+    if report.backup_path is not None:
+        out.write(f"  backup      : {report.backup_path}\n")
+    else:
+        out.write("  backup      : not needed (new file)\n")
+    out.write("  read-back OK: the unit file re-read byte-identical\n")
+    out.write(f"  owner-only  : {'yes' if report.detail.get('owner_only') else 'no'}\n")
+    _emit_commands(report.commands, out, prefix="ran")
+    out.write(f"  registered  : {'yes' if report.registered else 'no'}\n")
+    out.write(f"next: run `{PROG} service status`\n")
+    return EXIT_OK
+
+
+def _cmd_service_status(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    settings, code = _resolve_db_path(args, env, err)
+    if settings is None:
+        return code
+    try:
+        report = servicectl.status(settings, env=env, **_service_kwargs(args))
+    except servicectl.ServiceError as exc:
+        return _fail(err, str(exc), _service_exit_code(exc))
+    except Exception as exc:  # noqa: BLE001
+        return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
+
+    payload = report.redacted_payload()
+    if args.json:
+        out.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        return EXIT_OK
+
+    out.write(f"{PROG} service status\n")
+    out.write(f"  supervisor  : {payload['supervisor'] or 'unavailable'}\n")
+    out.write(f"  unit present: {payload['unit_present']}\n")
+    out.write(f"  unit managed: {payload['unit_managed']}\n")
+    out.write(f"  registered  : {payload['registered']}\n")
+    authority = payload.get("authority") or {}
+    running = authority.get("running")
+    out.write(
+        "  authority   : "
+        + ("running (database is owned)" if running else "not running")
+        + "\n"
+    )
+    if authority.get("metadata_present"):
+        out.write(
+            f"  last owner  : instance {authority.get('instance_id')} "
+            f"at {authority.get('acquired_at')} "
+            f"(current: {authority.get('metadata_is_current')})\n"
+        )
+    out.write(
+        f"  database    : ready={payload['database']['ready']} "
+        f"schema={payload['database']['schema_version']}\n"
+    )
+    return EXIT_OK
+
+
+def _cmd_service_uninstall(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    settings, code = _resolve_db_path(args, env, err)
+    if settings is None:
+        return code
+    try:
+        report = servicectl.uninstall(
+            settings, env=env, dry_run=args.dry_run, **_service_kwargs(args)
+        )
+    except servicectl.ServiceError as exc:
+        return _fail(err, str(exc), _service_exit_code(exc))
+    except Exception as exc:  # noqa: BLE001
+        return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
+
+    out.write(f"{PROG} service uninstall ({report.supervisor})\n")
+    out.write(f"  unit file   : {report.unit_path}\n")
+    if report.dry_run:
+        out.write("  dry run     : nothing was removed, nothing was unregistered\n")
+        _emit_commands(report.commands, out, prefix="would run")
+        return EXIT_OK
+    _emit_commands(report.commands, out, prefix="ran")
+    out.write(f"  unit removed: {'yes' if report.unit_removed else 'no (was absent)'}\n")
+    out.write("  database    : untouched (uninstall never deletes memories)\n")
+    for warning in report.detail.get("supervisor_warnings", []):
+        err.write(f"warning: {warning}\n")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
@@ -729,6 +909,78 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _common(db_migrate)
     db_migrate.set_defaults(handler=_cmd_db_migrate)
+
+    # -- service: per-user supervisor lifecycle (task 6.9) ---------------
+    service = sub.add_parser(
+        "service",
+        help="install / inspect / remove the per-user supervisor unit",
+        description=(
+            "Per-user service lifecycle so the authority does not depend on a "
+            "terminal staying open. Never installs a system-wide unit and never "
+            "writes a secret into a unit file."
+        ),
+    )
+    service_sub = service.add_subparsers(
+        dest="service_command", required=True, metavar="operation"
+    )
+
+    def _service_common(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--config-dir", default=None, help="directory for config.toml")
+        sp.add_argument("--db-path", default=None, help="path of the authority database")
+        sp.add_argument(
+            "--supervisor",
+            default=None,
+            choices=list(servicectl.SUPPORTED_SUPERVISORS),
+            help="override supervisor detection (default: detect from the platform)",
+        )
+        sp.add_argument(
+            "--unit-path",
+            default=None,
+            metavar="PATH",
+            help="override where the unit definition is written/read",
+        )
+
+    svc_install = service_sub.add_parser(
+        "install", help="render and register a per-user supervisor unit"
+    )
+    _service_common(svc_install)
+    svc_install.add_argument(
+        "--executable",
+        default=None,
+        metavar="PATH",
+        help="console script to supervise (default: the one next to this interpreter)",
+    )
+    svc_install.add_argument(
+        "--force",
+        action="store_true",
+        help="replace an existing unit we previously wrote (backup first)",
+    )
+    svc_install.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the unit definition and the exact commands; write/run nothing",
+    )
+    svc_install.set_defaults(handler=_cmd_service_install)
+
+    svc_status = service_sub.add_parser(
+        "status", help="report installed / registered / running state (redacted)"
+    )
+    _service_common(svc_status)
+    svc_status.add_argument(
+        "--json", action="store_true", help="emit a machine-readable report"
+    )
+    svc_status.set_defaults(handler=_cmd_service_status)
+
+    svc_uninstall = service_sub.add_parser(
+        "uninstall", help="unregister and delete the unit we wrote (never the database)"
+    )
+    _service_common(svc_uninstall)
+    svc_uninstall.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the exact commands; remove nothing",
+    )
+    svc_uninstall.set_defaults(handler=_cmd_service_uninstall)
 
     return parser
 

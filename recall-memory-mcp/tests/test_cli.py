@@ -13,6 +13,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -517,30 +518,68 @@ def test_doctor_reports_invalid_settings_without_traceback(tmp_path: Path, isola
     assert "Traceback" not in out
 
 
-    # ---------------------------------------------------------------------------
-    # 6.3 — serve command tests
-    # ---------------------------------------------------------------------------
-    def test_serve_refuses_when_not_initialised(tmp_path: Path, isolated_env) -> None:
-     env = init_env(tmp_path, isolated_env)
-     code, _out, err = run(["serve"], env)
-     assert code == cli.EXIT_REFUSED
-     assert "no ready authority database" in err
-    def test_serve_runs_injectable_runner(tmp_path: Path, isolated_env) -> None:
-     env = init_env(tmp_path, isolated_env)
-     assert run(["init"], env)[0] == cli.EXIT_OK
-     recorded: list[tuple[Any, Any, dict[str, str]]] = []
-     def fake_runner(app: Any, settings: Any, merged_env: dict[str, str]) -> None:
-         recorded.append((app, settings, merged_env))
-     import argparse
-     parser = cli.build_parser()
-     args = parser.parse_args(["serve", "--port", "19889"])
-     setattr(args, "runner", fake_runner)
-     import io
-     out, err = io.StringIO(), io.StringIO()
-     code = args.handler(args, env, out, err)
-     assert code == cli.EXIT_OK
-     assert len(recorded) == 1
-     app, settings, _ = recorded[0]
-     assert settings.port == 19889
-     assert app is not None
-     assert "starting recall-memory-mcp server" in out.getvalue()
+# ---------------------------------------------------------------------------
+# 6.3 — serve command tests
+#
+# NOTE (task 6.9): these two tests used to be nested *inside*
+# `test_doctor_reports_invalid_settings_without_traceback`, so pytest never
+# collected them and `serve` was in effect untested.  They are module-level
+# functions now; `test_parser_registers_the_serve_tests` below pins that down
+# so the same accident cannot come back unnoticed.
+# ---------------------------------------------------------------------------
+
+
+def test_serve_refuses_when_not_initialised(tmp_path: Path, isolated_env) -> None:
+    env = init_env(tmp_path, isolated_env)
+    code, _out, err = run(["serve"], env)
+    assert code == cli.EXIT_REFUSED
+    assert "no ready authority database" in err
+
+
+def test_serve_runs_injectable_runner(tmp_path: Path, isolated_env) -> None:
+    import io
+
+    env = init_env(tmp_path, isolated_env)
+    assert run(["init"], env)[0] == cli.EXIT_OK
+
+    recorded: list[tuple[Any, Any, dict[str, str]]] = []
+
+    def fake_runner(app: Any, settings: Any, merged_env: dict[str, str]) -> None:
+        recorded.append((app, settings, merged_env))
+
+    parser = cli.build_parser()
+    args = parser.parse_args(["serve", "--port", "19889"])
+    args.runner = fake_runner
+    out, err = io.StringIO(), io.StringIO()
+    code = args.handler(args, env, out, err)
+
+    assert code == cli.EXIT_OK, err.getvalue()
+    assert len(recorded) == 1
+    app, settings, _ = recorded[0]
+    assert settings.port == 19889
+    assert app is not None
+    assert "starting recall-memory-mcp server" in out.getvalue()
+
+
+def test_every_test_in_this_module_is_top_level() -> None:
+    """Guard against the nesting accident that hid the `serve` tests.
+
+    A test defined inside another test is never collected, so it silently
+    proves nothing.  `__qualname__` differs from `__name__` exactly when a
+    function is nested, which is the cheapest reliable detector.
+    """
+
+    import types
+
+    module = sys.modules[__name__]
+    nested = [
+        name
+        for name, obj in vars(module).items()
+        if name.startswith("test_")
+        and isinstance(obj, types.FunctionType)
+        and obj.__qualname__ != name
+    ]
+    assert nested == []
+    # And the two tests this guard was written for really are collectable.
+    assert callable(getattr(module, "test_serve_refuses_when_not_initialised"))
+    assert callable(getattr(module, "test_serve_runs_injectable_runner"))
