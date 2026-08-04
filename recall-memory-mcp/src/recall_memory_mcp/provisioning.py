@@ -17,6 +17,7 @@ returned to a client and ``doctor`` redacts them (R8.5).
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import sqlite3
@@ -378,8 +379,12 @@ def _create_authority_database(db_path: Path, *, owner_id: str, now: str) -> int
         finally:
             conn.close()
 
-        # 3. independent reopen read-back (task 6.2)
-        with migrations.open_migration_connection(db_path, readonly=True) as reopened:
+        # 3. independent reopen read-back (task 6.2).  ``closing`` matters:
+        # ``Connection.__exit__`` ends the transaction but never closes the
+        # connection, and a leaked reader keeps the ``-wal`` sidecar open.
+        with contextlib.closing(
+            migrations.open_migration_connection(db_path, readonly=True)
+        ) as reopened:
             migrations.verify_migrated_database(reopened)
             durable = migrations.current_schema_version(reopened)
             if durable != version:

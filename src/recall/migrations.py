@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from contextlib import closing
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -108,7 +109,11 @@ def sqlite_backup(source_path: str | Path, destination_path: str | Path) -> Path
         destination_conn.close()
         source_conn.close()
 
-    with open_migration_connection(destination, readonly=True) as reopened:
+    # ``closing`` matters: ``sqlite3.Connection.__exit__`` only ends the
+    # transaction, it does NOT close the connection.  A leaked read-only
+    # connection keeps the ``-wal`` sidecar open, which breaks whole-database
+    # break-glass operations on Windows.
+    with closing(open_migration_connection(destination, readonly=True)) as reopened:
         integrity = reopened.execute("PRAGMA integrity_check").fetchone()
         if integrity != ("ok",):
             destination.unlink(missing_ok=True)
@@ -804,7 +809,7 @@ def migrate_database(
     source = Path(db_path)
     backup = sqlite_backup(source, backup_path)
 
-    with open_migration_connection(source, readonly=True) as before_conn:
+    with closing(open_migration_connection(source, readonly=True)) as before_conn:
         before_fingerprint = _legacy_fingerprint(before_conn)
         from_version = current_schema_version(before_conn)
 
@@ -824,7 +829,7 @@ def migrate_database(
     finally:
         conn.close()
 
-    with open_migration_connection(source, readonly=True) as reopened:
+    with closing(open_migration_connection(source, readonly=True)) as reopened:
         verify_migrated_database(reopened)
         if _legacy_fingerprint(reopened) != before_fingerprint:
             raise MigrationVerificationError("Reopen legacy read-back did not match")

@@ -34,7 +34,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, TextIO
 
-from . import MCP_SDK_REQUIREMENT, __version__, client_configs, provisioning, redaction
+from . import (
+    MCP_SDK_REQUIREMENT,
+    __version__,
+    breakglass,
+    client_configs,
+    provisioning,
+    redaction,
+)
+from .authority import AuthorityError, AuthorityNotInitialisedError, build_app
 from .settings import LOOPBACK_HOSTS, ServerMode, ServerSettings, SettingsError
 
 PROG: Final[str] = "recall-memory-mcp"
@@ -452,6 +460,185 @@ def _cmd_client_config(
     return EXIT_OK
 
 
+def _cmd_serve(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    merged = _env_with_overrides(env, config_dir=args.config_dir, db_path=args.db_path)
+    if args.host:
+        merged["RECALL_MCP_HOST"] = args.host
+    if args.port is not None:
+        merged["RECALL_MCP_PORT"] = str(args.port)
+
+    try:
+        settings = resolve_settings(merged)
+    except SettingsError as exc:
+        return _fail(err, str(exc), EXIT_USAGE)
+
+    try:
+        status = provisioning.database_status(settings.db_path)
+        if not status.exists or not status.ready:
+            return _fail(
+                err,
+                f"no ready authority database at target; run `{PROG} init` first",
+                EXIT_REFUSED,
+            )
+        app = build_app(settings, env=merged)
+    except (AuthorityNotInitialisedError, provisioning.ProvisioningError) as exc:
+        return _fail(err, str(exc), EXIT_REFUSED)
+    except (AuthorityError, SettingsError) as exc:
+        return _fail(err, str(exc), EXIT_FAILURE)
+    except Exception as exc:  # noqa: BLE001
+        return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
+
+    runner = getattr(args, "runner", None)
+    if runner is not None:
+        out.write(f"starting {PROG} server ({settings.mode.value} mode)...\n")
+        try:
+            runner(app, settings, merged)
+            return EXIT_OK
+        except Exception as exc:  # noqa: BLE001
+            return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
+
+    try:
+        import uvicorn  # noqa: PLC0415
+    except ImportError:
+        return _fail(err, "uvicorn is required to run `serve`", EXIT_FAILURE)
+
+    out.write(
+        f"starting {PROG} server on {settings.host}:{settings.port} ({settings.mode.value} mode)...\n"
+    )
+    try:
+        uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
+        return EXIT_OK
+    except Exception as exc:  # noqa: BLE001
+        return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
+
+
+# ---------------------------------------------------------------------------
+# db — offline break-glass (task 6.8; allowlist proven by task 6.10c)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_db_path(
+    args: argparse.Namespace, env: Mapping[str, str], err: TextIO
+) -> tuple[ServerSettings | None, int]:
+    merged = _env_with_overrides(
+        env, config_dir=getattr(args, "config_dir", None), db_path=getattr(args, "db_path", None)
+    )
+    try:
+        return resolve_settings(merged), EXIT_OK
+    except SettingsError as exc:
+        return None, _fail(err, str(exc), EXIT_USAGE)
+
+
+def _breakglass_exit_code(exc: Exception) -> int:
+    """Refusals are exit 3; genuine failures are exit 1."""
+
+    refusals = (
+        breakglass.OfflineOperationDeniedError,
+        breakglass.ConfirmationRequiredError,
+        breakglass.AuthorityBusyError,
+        breakglass.DestinationRefusedError,
+        breakglass.SourceRefusedError,
+    )
+    return EXIT_REFUSED if isinstance(exc, refusals) else EXIT_FAILURE
+
+
+def _emit_breakglass_report(report: breakglass.BreakGlassReport, out: TextIO) -> None:
+    out.write(f"break-glass {report.operation}: {report.outcome}\n")
+    out.write(f"  database identity : {report.db_identity}\n")
+    for key in sorted(report.detail):
+        out.write(f"  {key:<18}: {report.detail[key]}\n")
+    if report.produced_path is not None:
+        out.write(f"  path              : {report.produced_path}\n")
+    if report.safety_backup_path is not None:
+        out.write(f"  safety snapshot   : {report.safety_backup_path}\n")
+    out.write(f"  operator audit    : event {report.audit_event_id}\n")
+
+
+def _run_breakglass(
+    operation: str,
+    db_path: Any,
+    action: Any,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    try:
+        breakglass.assert_offline_allowed(operation)
+    except breakglass.OfflineOperationDeniedError as exc:
+        return _fail(err, str(exc), EXIT_REFUSED)
+
+    err.write(breakglass.warning_text(operation, db_path) + "\n")
+    try:
+        report = action()
+    except breakglass.BreakGlassError as exc:
+        return _fail(err, str(exc), _breakglass_exit_code(exc))
+    except Exception as exc:  # noqa: BLE001 - never leak a traceback
+        return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
+    _emit_breakglass_report(report, out)
+    return EXIT_OK
+
+
+def _cmd_db_backup(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    settings, code = _resolve_db_path(args, env, err)
+    if settings is None:
+        return code
+    return _run_breakglass(
+        "backup",
+        settings.db_path,
+        lambda: breakglass.backup_database(
+            settings.db_path, args.destination, confirm=args.confirm
+        ),
+        out,
+        err,
+    )
+
+
+def _cmd_db_restore(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    settings, code = _resolve_db_path(args, env, err)
+    if settings is None:
+        return code
+    if not args.whole_database:
+        return _fail(
+            err,
+            "`db restore` only performs a whole-database restore; pass "
+            "--whole-database to acknowledge that. Row-level restore is an "
+            "online owner-scoped admin operation and has no offline path.",
+            EXIT_REFUSED,
+        )
+    return _run_breakglass(
+        "restore",
+        settings.db_path,
+        lambda: breakglass.restore_whole_database(
+            settings.db_path,
+            args.source,
+            whole_database=True,
+            confirm=args.confirm,
+        ),
+        out,
+        err,
+    )
+
+
+def _cmd_db_migrate(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    settings, code = _resolve_db_path(args, env, err)
+    if settings is None:
+        return code
+    return _run_breakglass(
+        "migrate",
+        settings.db_path,
+        lambda: breakglass.migrate_database(settings.db_path, confirm=args.confirm),
+        out,
+        err,
+    )
+
+
 # ---------------------------------------------------------------------------
 # parser / entry point
 # ---------------------------------------------------------------------------
@@ -483,6 +670,66 @@ def build_parser() -> argparse.ArgumentParser:
         help="write the configuration to PATH (backup + read-back first)",
     )
     client.set_defaults(handler=_cmd_client_config)
+
+    serve = sub.add_parser("serve", help="run the stateful Streamable HTTP MCP server")
+    serve.add_argument("--config-dir", default=None, help="directory for config.toml")
+    serve.add_argument("--db-path", default=None, help="path of the authority database")
+    serve.add_argument("--host", default=None, help="bind host (default: 127.0.0.1)")
+    serve.add_argument("--port", type=int, default=None, help="bind port (default: 8765)")
+    serve.set_defaults(handler=_cmd_serve)
+
+    # -- db: offline break-glass ---------------------------------------
+    # The subparser choices ARE the allowlist.  `db memory-export`,
+    # `db grant-edit`, `db sql`, ... are not registered, so argparse
+    # rejects them, and `breakglass.assert_offline_allowed` rejects them
+    # again if anything ever calls the library directly (task 6.10c).
+    db = sub.add_parser(
+        "db",
+        help="offline break-glass whole-database operations (service must be stopped)",
+        description=(
+            "Offline direct-database break-glass. Trusted local OS operator boundary: "
+            "it does NOT enforce MCP owner ACLs. Only whole-database backup, "
+            "whole-database restore and migrate are available here; every memory- or "
+            "grant-level operation is an online owner-scoped admin command."
+        ),
+    )
+    db_sub = db.add_subparsers(dest="db_command", required=True, metavar="operation")
+
+    def _common(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--config-dir", default=None, help="directory for config.toml")
+        sp.add_argument("--db-path", default=None, help="path of the authority database")
+        sp.add_argument(
+            "--confirm",
+            default=None,
+            metavar="PHRASE",
+            help="exact confirmation phrase (printed by a dry run without --confirm)",
+        )
+
+    db_backup = db_sub.add_parser(
+        "backup", help="whole-database snapshot via the SQLite online backup API"
+    )
+    db_backup.add_argument("destination", help="new snapshot file (never overwritten)")
+    _common(db_backup)
+    db_backup.set_defaults(handler=_cmd_db_backup)
+
+    db_restore = db_sub.add_parser(
+        "restore", help="replace the ENTIRE authority database from a verified snapshot"
+    )
+    db_restore.add_argument("source", help="snapshot file to restore from")
+    db_restore.add_argument(
+        "--whole-database",
+        action="store_true",
+        help="required: this command has no row-level restore",
+    )
+    _common(db_restore)
+    db_restore.set_defaults(handler=_cmd_db_restore)
+
+    db_migrate = db_sub.add_parser(
+        "migrate", help="run the canonical schema migration with a pre-migration snapshot"
+    )
+    _common(db_migrate)
+    db_migrate.set_defaults(handler=_cmd_db_migrate)
+
     return parser
 
 

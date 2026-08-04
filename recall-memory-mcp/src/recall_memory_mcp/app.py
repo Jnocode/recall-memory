@@ -30,7 +30,7 @@ allowlist derived from validated settings.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, Final
 
@@ -134,9 +134,12 @@ def create_app(
     settings: ServerSettings,
     *,
     context_provider: ContextProvider | None = None,
+    server_middleware: Sequence[Any] = (),
 ) -> Starlette:
     """Build the production Streamable HTTP ASGI application (tasks 4.1 - 4.5)."""
-    server = create_server(service, context_provider=context_provider)
+    server = create_server(
+        service, context_provider=context_provider, middleware=server_middleware
+    )
     assert_stateful_streamable_http()
 
     # Task 4.5 — custom_route for /health MUST be registered before app is built

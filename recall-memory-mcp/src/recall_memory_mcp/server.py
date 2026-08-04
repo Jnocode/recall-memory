@@ -34,7 +34,7 @@ envelope shape is kept authoritative and the schema stays an open object.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -200,6 +200,7 @@ def create_server(
     context_provider: ContextProvider,
     *,
     version: str = __version__,
+    middleware: Sequence[Any] = (),
 ) -> MCPServer:
     """Build the MCPServer. Transport selection belongs to ``app.py`` (phase 4)."""
 
@@ -208,7 +209,10 @@ def create_server(
         title="Recall shared memory",
         version=version,
         instructions=SERVER_INSTRUCTIONS,
-        middleware=[sanitising_middleware],
+        # The SDK runs `Server.middleware` outermost-first, so caller-identity
+        # middleware supplied here wraps (and therefore precedes) the error
+        # sanitiser, and both run in the handler's own task.
+        middleware=[*middleware, sanitising_middleware],
     )
 
     def run(builder: Callable[[], Any], method: str) -> dict[str, Any]:
