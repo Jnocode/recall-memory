@@ -1,0 +1,34 @@
+{
+  "mcpServers": {
+    "recall-memory": {
+      "url": "https://memory.example.com/mcp",
+      "oauth": {
+        "clientId": "${RECALL_MCP_OAUTH_CLIENT_ID}",
+        "redirectUri": "http://127.0.0.1:8080/oauth/callback",
+        "oauthScopes": ["memory:read", "memory:write"]
+      },
+      "disabled": false,
+      "autoApprove": [
+        "memory_get",
+        "memory_recent",
+        "memory_search",
+        "memory_status"
+      ],
+      "disabledTools": []
+    },
+    "recall-memory-local": {
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer ${RECALL_MCP_TOKEN}"
+      },
+      "disabled": true,
+      "autoApprove": [
+        "memory_get",
+        "memory_recent",
+        "memory_search",
+        "memory_status"
+      ],
+      "disabledTools": []
+    }
+  }
+}

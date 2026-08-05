@@ -1,0 +1,10 @@
+# The sdist already carries `tests/`, and tests/test_client_assets.py asserts
+# against the host integration assets.  Without this graft the sdist would ship
+# a test suite it cannot pass (Phase 10.3 builds and runs an unpacked, non-Git
+# sdist), so `clients/` has to travel with it.
+graft clients
+
+# `docs/ide-mcp-setup.md` deliberately lives in the repository root, outside
+# this distribution.  test_client_assets.py detects that it is running outside a
+# repo checkout and skips the IDE-document assertions with an explicit reason
+# rather than silently passing.

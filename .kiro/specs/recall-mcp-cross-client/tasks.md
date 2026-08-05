@@ -153,30 +153,44 @@ Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memor
 
 ### ChatGPT Desktop
 
-- [ ] 7.1 建立 `clients/chatgpt/README.md`，只引用當前OpenAI developer mode流程。
-- [ ] 7.2 建立`PLUGIN_INSTRUCTIONS.md`，定義search/add/replace/remove何時呼叫，禁止全對話自動保存。
+- [x] 7.1 建立 `clients/chatgpt/README.md`，只引用當前OpenAI developer mode流程。
+- [x] 7.2 建立`PLUGIN_INSTRUCTIONS.md`，定義search/add/replace/remove何時呼叫，禁止全對話自動保存。
 - [ ] 7.3 用Secure MCP Tunnel連本機server；保存endpoint/auth discovery evidence，不保存token。
 - [ ] 7.4 真ChatGPT Desktop完成tool discovery與read/write canary。
 - [ ] 7.4a 把ChatGPT client/version、CIMD/OAuth path、headers、session/call trace寫入interop matrix。
 
 ### Claude Desktop
 
-- [ ] 7.5 建立 `clients/claude/README.md`與`INSTRUCTIONS.md`。
+- [x] 7.5 建立 `clients/claude/README.md`與`INSTRUCTIONS.md`。
 - [ ] 7.6 真Claude Desktop Custom Web connector連同一URL並完成OAuth。
 - [ ] 7.7 驗read/write與grant撤銷。
 - [ ] 7.7a 把Claude client/version、OAuth registration path、headers、session/call trace寫入interop matrix。
 
 ### Kiro
 
-- [ ] 7.8 建立 `clients/kiro/mcp.example.json`，remote URL + OAuth；secret只用env placeholder。
+- [x] 7.8 建立 `clients/kiro/mcp.example.json`，remote URL + OAuth；secret只用env placeholder。
 ### Phase 7 — E2E validation & canary read-back (Kiro & IDE Agents)
 
 - [ ] 7.11 真Kiro連同一URL並完成read/write canary。
 - [ ] 7.11a 把Kiro client/version、DCR/OAuth path、headers、session/call trace寫入interop matrix。
- - [ ] 7.12 生成 IDE 整合配置範例：`docs/ide-mcp-setup.md`（含 Cursor `.cursor/mcp.json`、Windsurf `mcp_config.json`、VS Code `settings.json` 與 Claude Code `claude mcp add`）。
+ - [x] 7.12 生成 IDE 整合配置範例：`docs/ide-mcp-setup.md`（含 Cursor `.cursor/mcp.json`、Windsurf `mcp_config.json`、VS Code `settings.json` 與 Claude Code `claude mcp add`）。
  - [ ] 7.12a 執行 IDE 代理（Cursor / Windsurf / VS Code / Claude Code）真機 MCP 呼叫測試，驗證工具發現與 `project:<slug>` scope 自動綁定，並寫入 interop matrix。
 
 **Gate 7:** 三端都對同一authority完成真tool call；`connected`不能代替call/read-back。
+
+> **7.1/7.2/7.5/7.8/7.12 completion basis (2026-08-05):** 82 asset tests green in
+> the checkout; 11/11 mutations caught by `phase7_asset_mutation_probe.py`;
+> 38/38 claims grounded in a live vendor fetch by `phase7_claim_grounding.py`
+> (with its own negative control); the assets survive an sdist build and the
+> suite is honest (71 passed / 11 skipped-with-reason, 0 failed) from an
+> unpacked non-Git sdist. Evidence: `evidence/phase7-claim-grounding.{txt,json}`,
+> `phase7-asset-mutation-probe.txt`, `phase7-sdist-asset-readback.txt`.
+>
+> **7.3/7.4/7.4a/7.6/7.7/7.7a/7.11/7.11a/7.12a stay unchecked.** They require an
+> interactive OAuth login in a real ChatGPT Desktop / Claude Desktop / Kiro / IDE
+> agent, which a headless scheduled run cannot perform. Writing the assets does
+> not discharge them, and `connected` would not either — only a cross-client
+> read-back does. Gate 7 is therefore NOT reachable from automation alone.
 
 ## Phase 8 — Cross-client consistency E2E
 
