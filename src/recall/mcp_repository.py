@@ -1740,6 +1740,13 @@ class RecallMCPRepository:
 
         conn = self._write_connection()
         try:
+            # R8.7 — a purge must remove content, not merely unlink it. With
+            # the default (secure_delete=OFF) SQLite leaves the old page
+            # bytes intact in the freelist, so the purged text would still be
+            # readable in the raw database file with a hex editor. Turning it
+            # on for this connection makes every page this transaction frees
+            # be overwritten with zeroes.
+            conn.execute("PRAGMA secure_delete=ON")
             conn.execute("BEGIN IMMEDIATE")
             grant = conn.execute(
                 """

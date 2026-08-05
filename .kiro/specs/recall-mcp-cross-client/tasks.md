@@ -141,12 +141,13 @@ Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memor
 - [x] 6.7 clean wheel install後執行`init`, `doctor`, `serve --help` smoke。
 - [x] 6.8 實作offline break-glass `db backup`、`db restore --whole-database`與`db migrate` allowlist；使用SQLite backup API、integrity/version check、service-stop + authority lock + explicit confirmation + content-free operator audit，禁止live DB普通copy。
 - [x] 6.9 實作`service install/status/uninstall`或接既有supervisor；驗crash/restart後authority與ownership lock正常。
-- [ ] 6.10 實作`memory export/restore/purge --expected-revision N` admin CLI與backup retention警告；purge依indexed memory_id scrub全部idempotency result為content-free deny tombstone，並以DB content scan、舊key replay、final revision event、external read-back證明不可還原也不可重建。
-- [ ] 6.10a Owner-scoped Admin CLI永遠只走online authority、由OS-bound local admin或`memory:admin` grant推導owner；測wrong owner/revoked grant與任何memory direct-DB fallback皆拒絕。
-- [ ] 6.10b 測export owner/scope isolation、tombstone policy、owner-only destination、symlink/overwrite拒絕與離機加密要求；purge後restore嘗試fail closed並提示backup retention責任。
+- [x] 6.10 實作`memory export/restore/purge --expected-revision N` admin CLI與backup retention警告；purge依indexed memory_id scrub全部idempotency result為content-free deny tombstone，並以DB content scan、舊key replay、final revision event、external read-back證明不可還原也不可重建。
+- [x] 6.10a Owner-scoped Admin CLI永遠只走online authority、由OS-bound local admin或`memory:admin` grant推導owner；測wrong owner/revoked grant與任何memory direct-DB fallback皆拒絕。
+- [x] 6.10b 測export owner/scope isolation、tombstone policy、owner-only destination、symlink/overwrite拒絕與離機加密要求；purge後restore嘗試fail closed並提示backup retention責任。
 - [x] 6.10c 測offline command allowlist只接受整庫backup/verify-restore/migrate；memory list/search/export/row-level restore/purge、grant edit全拒絕，且break-glass warning/confirmation/operator audit可read-back。
 
-**Gate 6:** 零知識使用者可安裝、初始化、診斷；不需要手填DB path或把secret寫入repo。
+**Gate 6: PASS** 零知識使用者可安裝、初始化、診斷；不需要手填DB path或把secret寫入repo。
+（clean-wheel `evidence/phase6-gate6-check.txt`：`--help`列出全部子命令；`init`先印路徑、拒絕覆寫、read-back；重跑`init`exit 3；`doctor --json`全綠且無絕對路徑/secret；`client-config`只印範本；`service status`未註冊任何OS unit；offline allowlist對 export/purge/memory-export/grant-edit/sql 全部 exit 2；`memory --help`無`--owner-id`；`config.toml`無任何secret賦值。）
 
 ## Phase 7 — Host integration assets
 

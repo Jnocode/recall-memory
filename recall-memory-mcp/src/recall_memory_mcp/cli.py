@@ -37,6 +37,7 @@ from typing import Any, Final, TextIO
 from . import (
     MCP_SDK_REQUIREMENT,
     __version__,
+    admincli,
     breakglass,
     client_configs,
     provisioning,
@@ -824,6 +825,165 @@ def _cmd_service_uninstall(
     return EXIT_OK
 
 
+# ---------------------------------------------------------------------------
+# memory — owner-scoped ONLINE admin (tasks 6.10 / 6.10a / 6.10b)
+# ---------------------------------------------------------------------------
+#
+# Everything below talks to the running authority over loopback HTTP.  There
+# is deliberately no ``--owner-id``, no ``--db-path``-driven fallback and no
+# offline twin: if the authority is not running, these commands refuse.
+
+
+def _admin_exit_code(exc: Exception) -> int:
+    if isinstance(exc, (admincli.AdminClientRefused, admincli.DestinationRefused)):
+        return EXIT_REFUSED
+    if isinstance(exc, admincli.AdminClientInvalid):
+        return EXIT_USAGE
+    return EXIT_FAILURE
+
+
+def _admin_client(
+    args: argparse.Namespace, env: Mapping[str, str], err: TextIO
+) -> tuple[Any, ServerSettings | None, int]:
+    settings, code = _resolve_db_path(args, env, err)
+    if settings is None:
+        return None, None, code
+    opener = getattr(args, "opener", None)
+    try:
+        client = admincli.connect(settings, opener=opener)
+    except admincli.AdminClientError as exc:
+        return None, None, _fail(err, str(exc), _admin_exit_code(exc))
+    return client, settings, EXIT_OK
+
+
+def _new_idempotency_key(args: argparse.Namespace) -> str:
+    import uuid  # noqa: PLC0415
+
+    supplied = getattr(args, "idempotency_key", None)
+    return supplied or f"admin-{uuid.uuid4().hex}"
+
+
+def _cmd_memory_export(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    settings, code = _resolve_db_path(args, env, err)
+    if settings is None:
+        return code
+
+    # Destination safety is checked BEFORE the export is requested: no
+    # plaintext memory content is ever pulled out of the authority for a
+    # target we would then refuse to write.
+    try:
+        destination = admincli.prepare_export_destination(args.output, settings.db_path)
+    except admincli.DestinationRefused as exc:
+        return _fail(err, str(exc), EXIT_REFUSED)
+
+    client, _settings, code = _admin_client(args, env, err)
+    if client is None:
+        return code
+
+    try:
+        payload = client.post(
+            "/admin/v1/memory/export",
+            {"scope": args.scope, "include_tombstones": bool(args.include_tombstones)},
+        )
+    except admincli.AdminClientError as exc:
+        return _fail(err, str(exc), _admin_exit_code(exc))
+
+    document = {key: value for key, value in payload.items() if key not in {"auth", "audit_event_id"}}
+    try:
+        report = admincli.write_export_document(destination, document)
+    except OSError as exc:
+        return _fail(err, redaction.redact_exception(exc), EXIT_FAILURE)
+    except admincli.AdminClientError as exc:
+        return _fail(err, str(exc), _admin_exit_code(exc))
+
+    out.write(f"exported scope    : {args.scope}\n")
+    out.write(f"memories          : {report['memory_count']}\n")
+    out.write(f"tombstones        : {report['tombstone_count']}\n")
+    out.write(f"includes tombstone: {'yes' if report['includes_tombstones'] else 'no'}\n")
+    out.write(f"destination       : {destination}\n")
+    out.write(f"owner-only        : {'yes' if report['owner_only'] else 'no'}\n")
+    out.write("read-back OK      : the export parses and matches the authority response\n")
+    out.write(f"authorized via    : {payload.get('auth', 'unknown')}\n")
+    err.write(f"warning: {admincli.BACKUP_RETENTION_NOTICE}\n")
+    return EXIT_OK
+
+
+def _cmd_memory_restore(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    client, _settings, code = _admin_client(args, env, err)
+    if client is None:
+        return code
+    try:
+        payload = client.post(
+            "/admin/v1/memory/restore",
+            {
+                "memory_id": args.memory_id,
+                "scope": args.scope,
+                "expected_revision": args.expected_revision,
+                "idempotency_key": _new_idempotency_key(args),
+            },
+        )
+    except admincli.AdminClientError as exc:
+        err.write(
+            "note: a restore that was refused may simply not exist any more. "
+            "A purged memory is unrecoverable from the authority; only your "
+            "own offline backups could still contain it, and their retention "
+            "and destruction are your responsibility.\n"
+        )
+        return _fail(err, str(exc), _admin_exit_code(exc))
+
+    out.write(f"restored memory : {payload['memory_id']}\n")
+    out.write(f"new revision    : {payload['revision']}\n")
+    out.write(f"restored at     : {payload['restored_at']}\n")
+    out.write(f"authorized via  : {payload.get('auth', 'unknown')}\n")
+    return EXIT_OK
+
+
+def _cmd_memory_purge(
+    args: argparse.Namespace, env: Mapping[str, str], out: TextIO, err: TextIO
+) -> int:
+    err.write(
+        "WARNING: purge is irreversible. It removes the content and every "
+        "index of one memory from the authority database and leaves only a "
+        "content-free tombstone event.\n"
+    )
+    err.write(f"WARNING: {admincli.BACKUP_RETENTION_NOTICE}\n")
+    if args.confirm != args.memory_id:
+        return _fail(
+            err,
+            "purge requires an exact confirmation; re-run with "
+            f"--confirm {args.memory_id}",
+            EXIT_REFUSED,
+        )
+
+    client, _settings, code = _admin_client(args, env, err)
+    if client is None:
+        return code
+    try:
+        payload = client.post(
+            "/admin/v1/memory/purge",
+            {
+                "memory_id": args.memory_id,
+                "scope": args.scope,
+                "expected_revision": args.expected_revision,
+                "idempotency_key": _new_idempotency_key(args),
+            },
+        )
+    except admincli.AdminClientError as exc:
+        return _fail(err, str(exc), _admin_exit_code(exc))
+
+    out.write(f"purged memory   : {payload['memory_id']}\n")
+    out.write(f"final revision  : {payload['final_revision']}\n")
+    out.write(f"purged at       : {payload['purged_at']}\n")
+    out.write(f"audit event     : {payload.get('audit_event_id', '')}\n")
+    out.write(f"authorized via  : {payload.get('auth', 'unknown')}\n")
+    out.write("recoverable     : no (content and all indexes are gone)\n")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
@@ -981,6 +1141,71 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the exact commands; remove nothing",
     )
     svc_uninstall.set_defaults(handler=_cmd_service_uninstall)
+
+    # -- memory: owner-scoped ONLINE admin (tasks 6.10 / 6.10a / 6.10b) ---
+    memory = sub.add_parser(
+        "memory",
+        help="owner-scoped admin operations against the RUNNING authority",
+        description=(
+            "Owner-scoped admin operations. These always go through the "
+            "running authority so the owner is derived from a verified "
+            "OS-bound local admin session or a memory:admin grant; there is "
+            "no offline direct-database path and no --owner-id."
+        ),
+    )
+    memory_sub = memory.add_subparsers(
+        dest="memory_command", required=True, metavar="operation"
+    )
+
+    def _memory_common(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--config-dir", default=None, help="directory for config.toml")
+        sp.add_argument(
+            "--scope", required=True, help="exact memory scope (never a pattern)"
+        )
+
+    mem_export = memory_sub.add_parser(
+        "export", help="write one authorized scope to a new owner-only JSON file"
+    )
+    _memory_common(mem_export)
+    mem_export.add_argument("--output", required=True, help="new file (never overwritten)")
+    mem_export.add_argument(
+        "--include-tombstones",
+        action="store_true",
+        help="include soft-deleted memories (the export states which it contains)",
+    )
+    mem_export.set_defaults(handler=_cmd_memory_export)
+
+    mem_restore = memory_sub.add_parser(
+        "restore", help="bring one soft-deleted memory back with a new revision"
+    )
+    _memory_common(mem_restore)
+    mem_restore.add_argument("memory_id")
+    mem_restore.add_argument(
+        "--expected-revision", type=int, required=True, help="current tombstone revision"
+    )
+    mem_restore.add_argument(
+        "--idempotency-key", default=None, help="reuse a key to replay one restore safely"
+    )
+    mem_restore.set_defaults(handler=_cmd_memory_restore)
+
+    mem_purge = memory_sub.add_parser(
+        "purge", help="irreversibly remove one memory's content and every index"
+    )
+    _memory_common(mem_purge)
+    mem_purge.add_argument("memory_id")
+    mem_purge.add_argument(
+        "--expected-revision", type=int, required=True, help="exact current revision"
+    )
+    mem_purge.add_argument(
+        "--confirm",
+        default=None,
+        metavar="MEMORY_ID",
+        help="required: repeat the memory id to confirm an irreversible purge",
+    )
+    mem_purge.add_argument(
+        "--idempotency-key", default=None, help="reuse a key to replay one purge safely"
+    )
+    mem_purge.set_defaults(handler=_cmd_memory_purge)
 
     return parser
 

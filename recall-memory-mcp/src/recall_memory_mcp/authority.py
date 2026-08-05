@@ -350,6 +350,101 @@ class SqliteAuthorityRepository:
             conn.close()
         return int(row[0]) if row else 0
 
+    # -- owner-scoped admin operations (tasks 6.10 / 6.10a / 6.10b) --------
+    #: Export is an *admin* read.  It is intentionally NOT the shared read
+    #: predicate: ``memory:read`` must never be able to bulk-dump a scope,
+    #: and a ``MIGRATION`` grant must never be able to export at all.
+    _ADMIN_EXPORT_SQL = """
+        SELECT m.id, m.content, mm.revision, mm.scope, mm.kind, mm.tags_json,
+               mm.content_hash, mm.source_client, mm.source_conversation,
+               mm.created_at, mm.updated_at, mm.deleted_at
+        FROM memory_metadata AS mm
+        JOIN memories AS m ON m.id = mm.memory_id
+        JOIN client_grants AS authorized_grant
+          ON authorized_grant.grant_id = ?
+         AND authorized_grant.owner_id = mm.owner_id
+         AND authorized_grant.grant_kind = 'OAUTH'
+         AND authorized_grant.revoked_at IS NULL
+         AND authorized_grant.unlinked_at IS NULL
+        WHERE EXISTS (
+                  SELECT 1
+                  FROM json_each(authorized_grant.memory_scope_patterns_json)
+                       AS authorized_scope
+                  WHERE authorized_scope.type = 'text'
+                    AND authorized_scope.value = mm.scope
+              )
+          AND EXISTS (
+                  SELECT 1
+                  FROM json_each(authorized_grant.oauth_scopes_json) AS oauth_scope
+                  WHERE oauth_scope.type = 'text'
+                    AND oauth_scope.value = 'memory:admin'
+              )
+          AND mm.scope = ?
+          AND (? = 1 OR mm.deleted_at IS NULL)
+        ORDER BY mm.created_at, m.id
+    """
+
+    def export_scoped(
+        self, *, grant_id: str, scope: str, include_tombstones: bool = False
+    ) -> tuple[dict[str, Any], ...]:
+        """Owner-scoped bulk read for ``memory export`` (R8.4 / R8.8).
+
+        Authorization is expressed in SQL exactly like every other read, so
+        knowing a ``memory_id`` — or holding a read-only grant — cannot widen
+        the result set.  Tombstones are excluded unless the caller explicitly
+        asked for them, and the flag travels back out so the export document
+        can state what it contains.
+        """
+
+        if not isinstance(grant_id, str) or not grant_id.strip():
+            raise repo.RepositoryValidationError("grant_id must not be blank")
+        if not isinstance(scope, str) or not scope.strip():
+            raise repo.RepositoryValidationError("scope must not be blank")
+        if not isinstance(include_tombstones, bool):
+            raise repo.RepositoryValidationError("include_tombstones must be a boolean")
+
+        conn = self._readonly()
+        try:
+            rows = conn.execute(
+                self._ADMIN_EXPORT_SQL,
+                (grant_id, scope, 1 if include_tombstones else 0),
+            ).fetchall()
+        except sqlite3.Error as exc:
+            logger.error("authority export failed: %s", redaction.redact_exception(exc))
+            raise repo.RepositoryError("authority database failure") from exc
+        finally:
+            conn.close()
+
+        exported: list[dict[str, Any]] = []
+        for row in rows:
+            exported.append(
+                {
+                    "memory_id": str(row[0]),
+                    "content": str(row[1]),
+                    "revision": int(row[2]),
+                    "scope": str(row[3]),
+                    "kind": str(row[4]),
+                    "tags": tuple(json.loads(row[5])) if row[5] else (),
+                    "content_hash": str(row[6]),
+                    "source_client": str(row[7]),
+                    "source_conversation": row[8],
+                    "created_at": str(row[9]),
+                    "updated_at": str(row[10]),
+                    "deleted_at": row[11],
+                }
+            )
+        return tuple(exported)
+
+    def restore_memory(self, **kwargs: Any) -> Any:
+        """Owner-admin row-level restore (core re-authorizes in SQL)."""
+
+        return self._call("restore_memory", **kwargs)
+
+    def purge_memory(self, **kwargs: Any) -> Any:
+        """Owner-admin irreversible purge (core re-authorizes in SQL)."""
+
+        return self._call("purge_memory", **kwargs)
+
     # -- embedding profiles -----------------------------------------------
     def _owner_for_write(self, *, grant_id: str, scopes: Sequence[str]) -> str:
         """Owner behind an *active* write grant that covers every scope.
@@ -624,7 +719,17 @@ def ensure_local_grant(
             merged_oauth = grants
             operation = "initial_bind"
 
-        grant_id = f"grant-local-{owner_id}-{generation}"
+        # ``grant_id`` must be unique per (owner, client, generation). Leaving
+        # the client out made a second local client (for example a seeding or
+        # migration identity) collide with the operator grant on
+        # ``UNIQUE(grant_id, owner_id)`` and fail to bind at all. The default
+        # client keeps its historical id so existing databases are unaffected.
+        client_suffix = (
+            ""
+            if client_id == LOCAL_CLIENT_ID
+            else "-" + hashlib.sha256(client_id.encode("utf-8")).hexdigest()[:8]
+        )
+        grant_id = f"grant-local-{owner_id}{client_suffix}-{generation}"
         conn.execute(
             """
             INSERT INTO client_grants (
@@ -967,17 +1072,20 @@ def build_app(
     memory_scopes: Sequence[str] = DEFAULT_MEMORY_SCOPES,
     resolver: CallerResolver | None = None,
     token_manager: Any | None = None,
+    admin_session: bool = True,
 ) -> Any:
     """Build the production ASGI app bound to the authority database."""
 
     from .app import create_app  # noqa: PLC0415 - avoids importing starlette at CLI import
 
     env = dict(os.environ) if env is None else dict(env)
+    digest_key = load_or_create_digest_key(settings.config_dir, env)
     service = service if service is not None else build_service(
-        settings, embedder=embedder, env=env
+        settings, embedder=embedder, env=env, digest_key=digest_key
     )
 
     require_auth = settings.require_auth
+    local_grant: AuthorityGrant | None = None
     if resolver is None:
         if require_auth:
             resolver = token_resolver(
@@ -991,19 +1099,90 @@ def build_app(
                 "localhost",
             }:
                 raise AuthorityError("only loopback local mode may run without authentication")
-            resolver = static_resolver(
-                ensure_local_grant(settings.db_path, memory_scopes=memory_scopes)
-            )
+            local_grant = ensure_local_grant(settings.db_path, memory_scopes=memory_scopes)
+            resolver = static_resolver(local_grant)
+
+    admin_routes = build_authority_admin_routes(
+        settings,
+        service=service,
+        digest_key=digest_key,
+        resolver=resolver,
+        memory_scopes=memory_scopes,
+        local_grant=local_grant,
+        enabled=admin_session,
+    )
 
     app = create_app(
         service,
         settings,
         context_provider=current_caller,
         server_middleware=(caller_context_middleware(resolver),),
+        extra_routes=admin_routes,
     )
     if require_auth:
         app.add_middleware(RequireBearerMiddleware, resolver=resolver)
     return app
+
+
+def build_authority_admin_routes(
+    settings: ServerSettings,
+    *,
+    service: RecallMemoryService,
+    digest_key: bytes,
+    resolver: CallerResolver,
+    memory_scopes: Sequence[str] = DEFAULT_MEMORY_SCOPES,
+    local_grant: "AuthorityGrant | None" = None,
+    enabled: bool = True,
+) -> tuple[tuple[str, tuple[str, ...], Any], ...]:
+    """Admin routes + the OS-bound local admin session behind them (6.10a).
+
+    The local session is *not* a privilege escalation: its token file is
+    owner-only, so the only account that can read it is the account that
+    already runs the authority and could open the database file directly.
+    What the session buys is that the CLI still goes through the online
+    authority — with owner derivation, scope checks and an audit trail —
+    instead of growing an offline direct-DB twin.
+    """
+
+    from . import admin as admin_mod  # noqa: PLC0415
+    from . import adminapi  # noqa: PLC0415
+
+    admin_service = admin_mod.build_admin_service(
+        settings, repository=service.repository, digest_key=digest_key
+    )
+
+    session = None
+    context_factory: Any = None
+    if enabled:
+        try:
+            grant = local_grant or ensure_local_grant(
+                settings.db_path, memory_scopes=memory_scopes
+            )
+        except AuthorityError as exc:
+            logger.warning(
+                "local admin session disabled: %s", redaction.redact_exception(exc)
+            )
+        else:
+            session = adminapi.create_local_admin_session(
+                settings.config_dir,
+                endpoint=f"http://{settings.host}:{settings.port}",
+            )
+            context_factory = grant.caller_context
+
+    # SECURITY: in loopback local mode the MCP resolver is a *static* one —
+    # it returns the local grant for any header at all, because reaching the
+    # loopback port is the whole authentication story for model tools. Admin
+    # operations are irreversible, so they must not inherit that: handing the
+    # static resolver to the authenticator would let any local process purge
+    # memories with an arbitrary bearer token. Only a resolver that actually
+    # verifies a token (``require_auth``) is accepted as an admin credential;
+    # otherwise the owner-only session file is the sole admin credential.
+    authenticator = adminapi.AdminAuthenticator(
+        session=session,
+        local_context_factory=context_factory,
+        oauth_resolver=resolver if settings.require_auth else None,
+    )
+    return adminapi.build_admin_routes(admin_service, authenticator)
 
 
 def _default_token_manager(env: Mapping[str, str]) -> Any:
@@ -1030,6 +1209,7 @@ __all__ = [
     "SqliteAuthorityRepository",
     "bearer_token",
     "build_app",
+    "build_authority_admin_routes",
     "build_service",
     "caller_context_middleware",
     "current_caller",

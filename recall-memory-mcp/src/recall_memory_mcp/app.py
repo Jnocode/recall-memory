@@ -135,6 +135,7 @@ def create_app(
     *,
     context_provider: ContextProvider | None = None,
     server_middleware: Sequence[Any] = (),
+    extra_routes: Sequence[tuple[str, Sequence[str], Any]] = (),
 ) -> Starlette:
     """Build the production Streamable HTTP ASGI application (tasks 4.1 - 4.5)."""
     server = create_server(
@@ -152,6 +153,13 @@ def create_app(
                 "mode": settings.mode.value,
             }
         )
+
+    # Task 6.10a — owner-scoped admin endpoints.  Same rule as /health: a
+    # custom route is only picked up if it is registered *before*
+    # ``streamable_http_app()`` builds the Starlette app.  These are not MCP
+    # tools and are never advertised to a model client.
+    for path, methods, endpoint in extra_routes:
+        server.custom_route(path, methods=list(methods))(endpoint)
 
     security_settings = build_transport_security(settings)
 
