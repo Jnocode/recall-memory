@@ -108,21 +108,21 @@ jobs:
       - name: twine check
         run: python -m twine check ci-dist/core/* ci-dist/mcp/*
 
-      # Fresh venv, wheels only, no editable installs and no source tree on
-      # sys.path. --find-links keeps the locally built canonical core ahead of
-      # the older published recall-sqlite on PyPI.
+      # Fresh venv, wheels only, no editable install and no source tree on
+      # sys.path. Both wheels are passed by explicit path: `--find-links` alone
+      # is NOT enough, because recall-sqlite 0.2.0 is already on PyPI while this
+      # checkout's 0.2.0 has diverged, and pip then resolves the index copy.
+      # scripts/ci_install_readback.py fails closed on exactly that.
       - name: Fresh-venv wheel install read-back (POSIX)
         if: runner.os != 'Windows'
         run: |
           set -eu
           python -m venv ci-venv
           ./ci-venv/bin/python -m pip install --upgrade pip
-          ./ci-venv/bin/python -m pip install --find-links ci-dist/core ci-dist/mcp/*.whl
+          ./ci-venv/bin/python -m pip install ci-dist/core/*.whl ci-dist/mcp/*.whl
           cd "$RUNNER_TEMP"
-          "$GITHUB_WORKSPACE/ci-venv/bin/python" -c "import recall_memory_mcp, recall, pathlib; \
-            p = pathlib.Path(recall_memory_mcp.__file__).resolve(); \
-            assert 'ci-venv' in p.parts and 'site-packages' in p.parts, p; \
-            print('recall_memory_mcp', recall_memory_mcp.__version__, p)"
+          "$GITHUB_WORKSPACE/ci-venv/bin/python" \
+            "$GITHUB_WORKSPACE/scripts/ci_install_readback.py" "$GITHUB_WORKSPACE"
           "$GITHUB_WORKSPACE/ci-venv/bin/recall-memory-mcp" --help > /dev/null
           echo "console script OK"
 
@@ -133,12 +133,10 @@ jobs:
           set -eu
           python -m venv ci-venv
           ./ci-venv/Scripts/python.exe -m pip install --upgrade pip
-          ./ci-venv/Scripts/python.exe -m pip install --find-links ci-dist/core ci-dist/mcp/*.whl
+          ./ci-venv/Scripts/python.exe -m pip install ci-dist/core/*.whl ci-dist/mcp/*.whl
           cd "$RUNNER_TEMP"
-          "$GITHUB_WORKSPACE/ci-venv/Scripts/python.exe" -c "import recall_memory_mcp, recall, pathlib; \
-            p = pathlib.Path(recall_memory_mcp.__file__).resolve(); \
-            assert 'ci-venv' in p.parts and 'site-packages' in p.parts, p; \
-            print('recall_memory_mcp', recall_memory_mcp.__version__, p)"
+          "$GITHUB_WORKSPACE/ci-venv/Scripts/python.exe" \
+            "$GITHUB_WORKSPACE/scripts/ci_install_readback.py" "$GITHUB_WORKSPACE"
           "$GITHUB_WORKSPACE/ci-venv/Scripts/recall-memory-mcp.exe" --help > /dev/null
           echo "console script OK"
 
