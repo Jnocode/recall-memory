@@ -1,10 +1,26 @@
-# The sdist already carries `tests/`, and tests/test_client_assets.py asserts
-# against the host integration assets.  Without this graft the sdist would ship
-# a test suite it cannot pass (Phase 10.3 builds and runs an unpacked, non-Git
-# sdist), so `clients/` has to travel with it.
+# Task 10.3 remediation (2026-08-07)
+# ----------------------------------
+# The comment below used to claim "the sdist already carries `tests/`".  It
+# does not.  setuptools' default sdist rule only picks up `test*.py`, so
+# `tests/_support.py` -- the shared fixture module imported by 7 test modules
+# -- was silently left out.  The unpacked sdist therefore failed collection
+# with `ModuleNotFoundError: No module named '_support'`, and the earlier
+# Phase 10.3 "unpacked non-Git sdist full suite" evidence had in fact only ever
+# run `tests/test_client_assets.py`, which is the one module that does not
+# import it.  Graft the directory explicitly instead of relying on a default.
+graft tests
+
+# tests/test_client_assets.py asserts against the host integration assets, so
+# `clients/` has to travel with the distribution or the sdist would ship a test
+# suite it cannot pass.
 graft clients
 
 # `docs/ide-mcp-setup.md` deliberately lives in the repository root, outside
 # this distribution.  test_client_assets.py detects that it is running outside a
 # repo checkout and skips the IDE-document assertions with an explicit reason
 # rather than silently passing.
+
+# Never ship build residue: a stale .pyc in the sdist could make a missing
+# source file look present.
+global-exclude __pycache__ *.py[cod] *.so .pytest_cache
+prune tests/__pycache__

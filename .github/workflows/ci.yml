@@ -140,6 +140,31 @@ jobs:
           "$GITHUB_WORKSPACE/ci-venv/Scripts/recall-memory-mcp.exe" --help > /dev/null
           echo "console script OK"
 
+      # Task 10.3 — the suite must pass from an UNPACKED, NON-GIT sdist, not
+      # only from the checkout. This step exists because the sdist previously
+      # shipped `tests/test_*.py` without `tests/_support.py` (setuptools'
+      # default sdist rule only matches `test*.py`), so 7 modules failed
+      # collection from the sdist while
+      # the checkout stayed green and nothing in CI noticed.
+      - name: Unpacked non-Git sdist full suite (task 10.3)
+        shell: bash
+        run: |
+          set -eu
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            VENV_PY="$GITHUB_WORKSPACE/ci-venv/Scripts/python.exe"
+          else
+            VENV_PY="$GITHUB_WORKSPACE/ci-venv/bin/python"
+          fi
+          "$VENV_PY" -m pip install pytest
+          rm -rf "$RUNNER_TEMP/sdist-check"
+          mkdir -p "$RUNNER_TEMP/sdist-check"
+          tar -xzf ci-dist/mcp/*.tar.gz -C "$RUNNER_TEMP/sdist-check"
+          cd "$RUNNER_TEMP/sdist-check"/recall_memory_mcp-*/
+          test ! -d .git
+          test ! -d .kiro
+          test -f tests/_support.py
+          "$VENV_PY" -m pytest -q -p no:cacheprovider
+
       - name: Upload distributions
         uses: actions/upload-artifact@v7
         with:

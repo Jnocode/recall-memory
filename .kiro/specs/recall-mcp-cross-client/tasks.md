@@ -194,7 +194,7 @@ Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memor
 
 ## Phase 8 — Cross-client consistency E2E
 
-- [ ] 8.1 建立唯一canary scope與content，不使用任何個資／secret。
+- [x] 8.1 建立唯一canary scope與content，不使用任何個資／secret。
 - [ ] 8.2 Kiro `memory_add`，記錄memory_id/revision=1/request_id。
 - [ ] 8.3 Claude `memory_get/search`，read-back同ID/revision/content hash。
 - [ ] 8.4 ChatGPT以expected_revision=1 `memory_replace`，取得revision=2。
@@ -207,26 +207,62 @@ Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memor
 
 **Gate 8:** 上述十步全部有外部read-back；才可宣稱「ChatGPT Desktop、Claude Desktop、Kiro共享記憶」。
 
+> **8.1 completion basis (2026-08-07):** `recall_memory_mcp/canary.py` +
+> `tests/test_canary.py` (31 tests) build one unique `project:recall-canary-<12
+> hex>` scope and its revision-1/revision-2 content. Safety is proven twice:
+> the content survives the project's own `redact_text` byte-for-byte, and an
+> independent 18-detector PII/secret scanner (with a negative control that
+> requires every detector to fire on hostile input) reports zero findings on
+> every value in the artifact. 5000 generated plans produced 5000 distinct
+> scopes and 0 unsafe plans. `phase8_canary_mutation_probe.py` injects 17
+> defects into `canary.py`; 16 must and do turn the suite RED, 1 is declared
+> EQUIVALENT with proof (the explicit `run_id` guard is redundant with the
+> pydantic `run_id`/`scope` patterns) and is paired with a "both guards
+> removed" mutation that is caught. Artifact + read-back:
+> `artifacts/recall-mcp-cross-client/canary/phase8-canary.json`,
+> `evidence/phase8-canary-readback.txt` (15/15 checks re-verified against the
+> bytes on disk), `evidence/phase8-canary-mutation-probe.txt`.
+>
+> **8.2 - 8.10 stay unchecked.** The suite's end-to-end test is one in-process
+> SDK client against a fake repository: it proves the canary is *accepted* by
+> the shipped tool surface, not that three real hosts share memory. Gate 8
+> still requires interactive OAuth in ChatGPT Desktop / Claude Desktop / Kiro,
+> which a headless scheduled run cannot perform.
+
 ## Phase 9 — Legacy migration and deprecation
 
-- [ ] 9.1 為既有`src/recall/recall_mcp.py`加deprecation test與新命令指引。
-- [ ] 9.2 若保留stdio，改成代理同一authority；不得直接開另一個primary DB。
-- [ ] 9.3 將可用的untracked`recall-server` REST/UI功能經獨立review後逐項吸收；禁止整包直接stage。
-- [ ] 9.4 更新`ARCHITECTURE.md`，把未驗證✅改成PARTIAL/TARGET；只有Gate evidence可標完成。
-- [ ] 9.5 更新README安裝、client matrix、auto-call限制、security與uninstall/backup流程。
+- [x] 9.1 為既有`src/recall/recall_mcp.py`加deprecation test與新命令指引。
+- [x] 9.2 若保留stdio，改成代理同一authority；不得直接開另一個primary DB。
+- [x] 9.3 將可用的untracked`recall-server` REST/UI功能經獨立review後逐項吸收；禁止整包直接stage。
+- [x] 9.4 更新`ARCHITECTURE.md`，把未驗證✅改成PARTIAL/TARGET；只有Gate evidence可標完成。
+- [x] 9.5 更新README安裝、client matrix、auto-call限制、security與uninstall/backup流程。
 
-**Gate 9:** public docs與tracked code一致；不存在兩個production MCP入口或兩套canonical core。
+**Gate 9: PASS** (public docs與tracked code完全一致；不存在兩個production MCP入口或兩套canonical core。)
 
 ## Phase 10 — Packaging, CI, and release
 
-- [ ] 10.1 建立source/version sync checker與retired-tag denylist。
-- [ ] 10.2 GitHub CI跑Windows/Linux × supported Python，含protocol/concurrency/package tests。
-- [ ] 10.3 clean build wheel/sdist；`twine check`；unpacked non-Git sdist全測。
-- [ ] 10.4 fresh venv從wheel安裝；確認module path在該venv site-packages。
-- [ ] 10.5 static secret/private-path scan與dependency audit。
-- [ ] 10.6 fresh-context maker ≠ grader進行spec compliance、security、protocol review。
+- [x] 10.1 建立source/version sync checker與retired-tag denylist。
+- [x] 10.2 GitHub CI跑Windows/Linux × supported Python，含protocol/concurrency/package tests。
+- [x] 10.3 clean build wheel/sdist；`twine check`；unpacked non-Git sdist全測。
+- [x] 10.4 fresh venv從wheel安裝；確認module path在該venv site-packages。
+- [x] 10.5 static secret/private-path scan與dependency audit。
+- [x] 10.6 fresh-context maker ≠ grader進行spec compliance、security、protocol review。
 - [ ] 10.7 PR CI全綠後merge/tag；trusted publishing。
 - [ ] 10.8 PyPI JSON、download digest、clean install、GitHub Release asset digest外部read-back。
 - [ ] 10.9 發布前再次驗名稱與官方client docs未變；若SDK/client契約變更，回Gate 3/7。
+
+> **10.3 re-verified 2026-08-07 after a real defect was found.** The original
+> tick rested on `evidence/phase7-sdist-asset-readback.txt`, which ran only
+> `tests/test_client_assets.py` from the unpacked sdist — the one module that
+> does not import `tests/_support.py`. Running the *whole* suite from the
+> sdist failed with `ModuleNotFoundError: No module named '_support'`
+> (7 collection errors), because `MANIFEST.in` relied on setuptools' default
+> rule, which only matches `tests/test*.py`. Fixed with `graft tests` +
+> `global-exclude __pycache__ *.py[cod]`, and a
+> `Unpacked non-Git sdist full suite (task 10.3)` step was added to the
+> `package` CI job (ubuntu + windows) so it cannot regress unnoticed.
+> After-state: `721 passed, 16 skipped` from the unpacked non-Git sdist, with
+> an import-origin read-back proving the sdist copy — not the checkout — was
+> executed. Evidence: `evidence/phase8-sdist-full-suite-readback.txt`.
 
 **Release stop condition:** 任一真host未通過、OAuth未通過、或只證明tool discovery而無cross-client read-back時，不得發布「安裝即同步記憶」宣稱。
