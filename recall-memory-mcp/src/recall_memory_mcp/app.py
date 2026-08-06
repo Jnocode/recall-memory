@@ -35,7 +35,10 @@ from contextlib import asynccontextmanager
 from typing import Any, Final
 
 from mcp.server.mcpserver import MCPServer
-from mcp.server.transport_security import TransportSecuritySettings
+from mcp.server.transport_security import (
+    TransportSecurityMiddleware,
+    TransportSecuritySettings,
+)
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -101,6 +104,53 @@ def assert_lifespan_wired(app: Starlette, server: MCPServer) -> None:
         raise TransportConfigError(
             "Starlette app has no lifespan_context; session_manager.run() will not be executed"
         )
+
+
+class CustomRouteSecurityMiddleware:
+    """Extend the SDK Host/Origin guard to non-``/mcp`` routes.
+
+    Finding H-1 (Phase 10 task 10.6 security review): ``TransportSecurityMiddleware``
+    lives *inside* ``StreamableHTTPSessionManager``, so it only ever sees requests
+    that reach the streamable-HTTP handler.  Routes registered through
+    ``MCPServer.custom_route()`` -- ``/health`` and every ``/admin/v1/*``
+    endpoint -- are plain Starlette routes and were served unguarded, so a
+    DNS-rebound browser reached the owner-scoped admin surface with
+    ``Host: evil.example.com``.
+
+    This middleware reuses the *same* SDK validator against the *same*
+    ``TransportSecuritySettings`` so there is exactly one allowlist, and skips
+    ``/mcp`` to avoid validating it twice (and to keep the SDK owning its own
+    protocol-version-specific rules).
+    """
+
+    def __init__(
+        self,
+        app: Any,
+        security_settings: TransportSecuritySettings,
+        *,
+        exempt_prefix: str = MCP_PATH,
+    ) -> None:
+        self.app = app
+        self.exempt_prefix = exempt_prefix
+        self._guard = TransportSecurityMiddleware(security_settings)
+
+    def _is_exempt(self, path: str) -> bool:
+        return path == self.exempt_prefix or path.startswith(self.exempt_prefix + "/")
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or self._is_exempt(scope.get("path", "")):
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope, receive)
+        error = await self._guard.validate_request(
+            request, is_post=(request.method == "POST")
+        )
+        if error is not None:
+            # The SDK responses are static strings ("Invalid Host header"),
+            # so nothing attacker-controlled and no path is echoed back.
+            await error(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 class RequestBodyLimitMiddleware:
@@ -171,6 +221,14 @@ def create_app(
         max_request_body_size=settings.max_body_bytes,
         transport_security=security_settings,
         host=settings.host,
+    )
+
+    # Finding H-1 remediation — guard every non-/mcp route (health + admin)
+    # with the same Host/Origin allowlist the SDK applies to /mcp.  Added
+    # before CORS so that CORS stays *outside* it and can still answer
+    # preflight OPTIONS; every real request is validated first.
+    app.add_middleware(
+        CustomRouteSecurityMiddleware, security_settings=security_settings
     )
 
     # CORS middleware (task 4.4 / task 4.7)

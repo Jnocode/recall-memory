@@ -8,3 +8,11 @@ __pycache__/
 *.egg-info/
 recall-memory-mcp/build/
 recall-memory-mcp/dist/
+
+# Local/CI build scratch. `dist/` at the repository root stays tracked on
+# purpose; these are throwaway outputs and must never be staged.
+/build/
+/ci-dist/
+/ci-venv/
+/.venv/
+/artifacts/

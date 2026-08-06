@@ -6,8 +6,16 @@ Usage: python -m recall.recall_mcp
    or: gemini mcp add recall "python" "path/to/src/recall/recall_mcp.py"
 """
 
-import sys, json, os, sqlite3
+import sys, json, os, sqlite3, warnings
 from datetime import datetime, timezone
+
+# Issue deprecation warning for legacy entry point (Task 9.1)
+warnings.warn(
+    "src/recall/recall_mcp.py is deprecated and will be removed in a future release. "
+    "Please migrate to the official MCP SDK server: `recall-memory-mcp serve`.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from .embed import embed
 from .store import SQLiteStore, Memory, extract_keywords

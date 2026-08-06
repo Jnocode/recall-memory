@@ -83,11 +83,21 @@ _RULES: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), REDACTED),
     (re.compile(r"\bAKIA[0-9A-Z]{12,}"), REDACTED),
     # 7. key=value / key: value secrets ("authorization" is rule 3's job).
+    #
+    # Finding H-2 (Phase 10 task 10.6 security review): the keyword used to be
+    # anchored with a leading ``\b``, so environment-variable style names whose
+    # *suffix* is the keyword -- ``RECALL_MCP_TOKEN_SECRET=...``,
+    # ``RECALL_MCP_DIGEST_KEY=...`` -- matched nothing and the raw value
+    # survived into piped subprocess stderr (``servicectl``).  The optional
+    # ``(?:[A-Za-z0-9]+[_-])*`` prefix accepts those namespaced names while
+    # still requiring a ``_``/``-`` separator immediately before the keyword,
+    # which is what keeps ordinary words ("monkey=1", "spoken=yes") out.
     (
         re.compile(
-            r"(?i)\b(api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token"
+            r"(?i)\b((?:[A-Za-z0-9]+[_-])*"
+            r"(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token"
             r"|client[_-]?secret|secret|token|password|passwd|pwd|private[_-]?key"
-            r"|session[_-]?key|cookie)\b\s*[\"']?\s*[:=]\s*[\"']?([^\s\"',}&]+)"
+            r"|session[_-]?key|key|cookie))\b\s*[\"']?\s*[:=]\s*[\"']?([^\s\"',}&]+)"
         ),
         lambda m: m.group(0).replace(m.group(2), REDACTED),  # type: ignore[arg-type]
     ),

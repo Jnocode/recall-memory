@@ -1,28 +1,150 @@
 name: CI
 
+# Task 10.2 — Windows/Linux x supported Python, including the protocol,
+# concurrency and packaging suites. The legacy ubuntu-only / root-tests-only
+# workflow it replaces did not exercise the MCP distribution at all.
+
 on:
   push:
-    branches: [master]
+    branches: [master, "feature/**"]
   pull_request:
     branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
-
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -e ".[dev]"
-    - name: Run tests (skip embed which needs LM Studio)
-      run: |
-        python -m pytest tests/ -v -k "not test_embed" --tb=short
+      - uses: actions/checkout@v7
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            recall-memory-mcp/pyproject.toml
+
+      # Declared dependencies only. Nothing here may inject fastapi/httpx or any
+      # other undeclared runtime into the canonical core (ownership matrix,
+      # task 0.2a). The canonical core is installed from THIS checkout so the
+      # MCP distribution never silently resolves the older published
+      # recall-sqlite wheel from PyPI.
+      - name: Install canonical core and MCP distribution
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" -e "./recall-memory-mcp[dev]"
+
+      - name: Report resolved environment
+        run: |
+          python -c "import sys; print(sys.version)"
+          python -m pip list
+
+      - name: Version sync and retired tag denylist (task 10.1)
+        run: python scripts/version_sync_check.py
+
+      # tests/test_p0_improvements.py is deliberately excluded: it imports the
+      # untracked recall-server prototype and is owned by the Phase 9 review
+      # (see BASELINE_TEST_RESULTS.md). It must never force fastapi into the
+      # recall-sqlite runtime dependency set.
+      - name: Core authority suite (migration / repository / concurrency / lock)
+        run: >-
+          python -m pytest -q -p no:cacheprovider
+          tests/test_core.py
+          tests/test_mcp_schema_migration.py
+          tests/test_mcp_repository.py
+          tests/test_mcp_concurrency.py
+          tests/test_authority_lock.py
+          tests/test_version_sync.py
+          tests/test_legacy_deprecation.py
+          tests/test_mcp_migration_grant_isolation.py
+
+      - name: MCP distribution suite (protocol / transport / auth / CLI)
+        run: python -m pytest -q -p no:cacheprovider recall-memory-mcp/tests
+
+  package:
+    name: package build / twine / fresh-install read-back
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Build canonical core (recall-sqlite)
+        run: python -m build --outdir ci-dist/core .
+
+      - name: Build MCP distribution (recall-memory-mcp)
+        run: python -m build --outdir ci-dist/mcp recall-memory-mcp
+
+      - name: twine check
+        run: python -m twine check ci-dist/core/* ci-dist/mcp/*
+
+      # Fresh venv, wheels only, no editable installs and no source tree on
+      # sys.path. --find-links keeps the locally built canonical core ahead of
+      # the older published recall-sqlite on PyPI.
+      - name: Fresh-venv wheel install read-back (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          set -eu
+          python -m venv ci-venv
+          ./ci-venv/bin/python -m pip install --upgrade pip
+          ./ci-venv/bin/python -m pip install --find-links ci-dist/core ci-dist/mcp/*.whl
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/ci-venv/bin/python" -c "import recall_memory_mcp, recall, pathlib; \
+            p = pathlib.Path(recall_memory_mcp.__file__).resolve(); \
+            assert 'ci-venv' in p.parts and 'site-packages' in p.parts, p; \
+            print('recall_memory_mcp', recall_memory_mcp.__version__, p)"
+          "$GITHUB_WORKSPACE/ci-venv/bin/recall-memory-mcp" --help > /dev/null
+          echo "console script OK"
+
+      - name: Fresh-venv wheel install read-back (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -eu
+          python -m venv ci-venv
+          ./ci-venv/Scripts/python.exe -m pip install --upgrade pip
+          ./ci-venv/Scripts/python.exe -m pip install --find-links ci-dist/core ci-dist/mcp/*.whl
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/ci-venv/Scripts/python.exe" -c "import recall_memory_mcp, recall, pathlib; \
+            p = pathlib.Path(recall_memory_mcp.__file__).resolve(); \
+            assert 'ci-venv' in p.parts and 'site-packages' in p.parts, p; \
+            print('recall_memory_mcp', recall_memory_mcp.__version__, p)"
+          "$GITHUB_WORKSPACE/ci-venv/Scripts/recall-memory-mcp.exe" --help > /dev/null
+          echo "console script OK"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: dists-${{ matrix.os }}
+          path: ci-dist/**
+          if-no-files-found: error

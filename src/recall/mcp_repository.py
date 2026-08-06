@@ -130,6 +130,23 @@ class RevisionConflictError(RuntimeError):
         self.current_revision = current_revision
 
 
+#: Finding M-1 (Phase 10 task 10.6 security review).  The shared read predicate
+#: below treats ``grant_kind='MIGRATION'`` as an authorization bypass so that a
+#: quarantined legacy import (whose ``oauth_scopes_json`` is ``[]`` by
+#: construction, see ``migrations.py``) stays readable at ``legacy:unscoped``
+#: for the migration/review workflow required by task 1.5.  That bypass must
+#: never be reachable from the client-facing MCP tool surface, so every
+#: client-facing read passes ``client_facing=True`` and gets this extra SQL
+#: predicate -- an engine-level filter, not a Python-side post-filter.
+_CLIENT_FACING_GRANT_KIND_SQL = "\n                 AND authorized_grant.grant_kind = 'OAUTH'"
+
+
+def _grant_kind_sql(client_facing: bool) -> str:
+    """Extra join predicate for reads that an OAuth client can reach."""
+
+    return _CLIENT_FACING_GRANT_KIND_SQL if client_facing else ""
+
+
 class RecallMCPRepository:
     """Repository adapter that never consults the user's default Recall path."""
 
@@ -2027,6 +2044,7 @@ class RecallMCPRepository:
         scope: str,
         query: str,
         limit: int = 20,
+        client_facing: bool = False,
     ) -> tuple[ScopedSearchResult, ...]:
         if not isinstance(grant_id, str) or not grant_id.strip():
             raise ValueError("grant_id must not be blank")
@@ -2038,7 +2056,7 @@ class RecallMCPRepository:
         fts_query = self._fts_query(query)
         with self._readonly_connection() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT m.id, m.content, mm.revision, mm.scope, mm.kind,
                        mm.content_hash, mm.source_client, mm.source_conversation,
                        mm.actor_id,
@@ -2050,7 +2068,7 @@ class RecallMCPRepository:
                   ON authorized_grant.grant_id = ?
                  AND authorized_grant.owner_id = mm.owner_id
                  AND authorized_grant.revoked_at IS NULL
-                 AND authorized_grant.unlinked_at IS NULL
+                 AND authorized_grant.unlinked_at IS NULL{_grant_kind_sql(client_facing)}
                 WHERE EXISTS (
                           SELECT 1
                           FROM json_each(
@@ -2089,6 +2107,7 @@ class RecallMCPRepository:
         grant_id: str,
         scope: str,
         memory_id: str,
+        client_facing: bool = False,
     ) -> ScopedMemoryResult | None:
         if not isinstance(grant_id, str) or not grant_id.strip():
             raise ValueError("grant_id must not be blank")
@@ -2099,7 +2118,7 @@ class RecallMCPRepository:
 
         with self._readonly_connection() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT m.id, m.content, mm.revision, mm.scope, mm.kind,
                        mm.tags_json, mm.content_hash, mm.source_client,
                        mm.source_conversation, mm.actor_id,
@@ -2110,7 +2129,7 @@ class RecallMCPRepository:
                   ON authorized_grant.grant_id = ?
                  AND authorized_grant.owner_id = mm.owner_id
                  AND authorized_grant.revoked_at IS NULL
-                 AND authorized_grant.unlinked_at IS NULL
+                 AND authorized_grant.unlinked_at IS NULL{_grant_kind_sql(client_facing)}
                 WHERE EXISTS (
                           SELECT 1
                           FROM json_each(
@@ -2164,6 +2183,7 @@ class RecallMCPRepository:
         grant_id: str,
         scope: str,
         limit: int = 20,
+        client_facing: bool = False,
     ) -> tuple[ScopedMemoryResult, ...]:
         if not isinstance(grant_id, str) or not grant_id.strip():
             raise ValueError("grant_id must not be blank")
@@ -2174,7 +2194,7 @@ class RecallMCPRepository:
 
         with self._readonly_connection() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT m.id, m.content, mm.revision, mm.scope, mm.kind,
                        mm.tags_json, mm.content_hash, mm.source_client,
                        mm.source_conversation, mm.actor_id,
@@ -2185,7 +2205,7 @@ class RecallMCPRepository:
                   ON authorized_grant.grant_id = ?
                  AND authorized_grant.owner_id = mm.owner_id
                  AND authorized_grant.revoked_at IS NULL
-                 AND authorized_grant.unlinked_at IS NULL
+                 AND authorized_grant.unlinked_at IS NULL{_grant_kind_sql(client_facing)}
                 WHERE EXISTS (
                           SELECT 1
                           FROM json_each(

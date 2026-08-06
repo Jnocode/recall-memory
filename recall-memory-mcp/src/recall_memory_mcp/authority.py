@@ -187,10 +187,18 @@ def pack_vector(vector: Iterable[float]) -> bytes:
 #: Grant predicate shared by every read.  Copied deliberately from
 #: ``recall.mcp_repository`` so a cardinality probe can never be broader than
 #: the reads it describes.
+#:
+#: Finding M-1 (Phase 10 task 10.6 security review): the core predicate lets a
+#: ``grant_kind='MIGRATION'`` grant read despite an empty ``oauth_scopes_json``
+#: so the legacy quarantine stays reviewable (task 1.5).  Nothing on *this*
+#: side of the boundary is a migration tool, so the client-facing copy pins
+#: ``grant_kind = 'OAUTH'`` and keeps no bypass branch at all.  The delegated
+#: reads below get the same guarantee via ``client_facing=True``.
 _READ_GRANT_PREDICATE = """
     JOIN client_grants AS authorized_grant
       ON authorized_grant.grant_id = ?
      AND authorized_grant.owner_id = mm.owner_id
+     AND authorized_grant.grant_kind = 'OAUTH'
      AND authorized_grant.revoked_at IS NULL
      AND authorized_grant.unlinked_at IS NULL
     WHERE EXISTS (
@@ -200,14 +208,11 @@ _READ_GRANT_PREDICATE = """
               WHERE authorized_scope.type = 'text'
                 AND authorized_scope.value = mm.scope
           )
-      AND (
-              authorized_grant.grant_kind = 'MIGRATION'
-              OR EXISTS (
-                  SELECT 1
-                  FROM json_each(authorized_grant.oauth_scopes_json) AS oauth_scope
-                  WHERE oauth_scope.type = 'text'
-                    AND oauth_scope.value IN ('memory:read', 'memory:admin')
-              )
+      AND EXISTS (
+              SELECT 1
+              FROM json_each(authorized_grant.oauth_scopes_json) AS oauth_scope
+              WHERE oauth_scope.type = 'text'
+                AND oauth_scope.value IN ('memory:read', 'memory:admin')
           )
       AND mm.scope = ?
       AND mm.deleted_at IS NULL
@@ -290,13 +295,13 @@ class SqliteAuthorityRepository:
 
     # -- reads -------------------------------------------------------------
     def search_scoped(self, **kwargs: Any) -> tuple[Any, ...]:
-        return self._call("search_scoped", **kwargs)
+        return self._call("search_scoped", client_facing=True, **kwargs)
 
     def get_scoped_memory(self, **kwargs: Any) -> Any | None:
-        return self._call("get_scoped_memory", **kwargs)
+        return self._call("get_scoped_memory", client_facing=True, **kwargs)
 
     def recent_scoped_memories(self, **kwargs: Any) -> tuple[Any, ...]:
-        return self._call("recent_scoped_memories", **kwargs)
+        return self._call("recent_scoped_memories", client_facing=True, **kwargs)
 
     def health(self) -> repo.RepositoryHealth:
         """Reachability + schema version. Never discloses a path or a count."""

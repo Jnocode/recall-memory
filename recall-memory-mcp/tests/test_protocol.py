@@ -24,6 +24,11 @@ ENV = {
     "APPDATA": r"C:\Users\test\AppData\Roaming",
 }
 
+# Finding H-1 remediation: /health is now behind the same Host allowlist as
+# /mcp, so these probes must present a Host the settings actually allow.
+# ``TestClient`` otherwise defaults to the bogus ``testserver`` host.
+ALLOWED_HOST = {"Host": "127.0.0.1:19876"}
+
 
 def _make_settings(**overrides: str) -> ServerSettings:
     env = {**ENV, **overrides}
@@ -51,7 +56,7 @@ class TestLifespan:
     def test_mcp_and_health_routes_present(self) -> None:
         client, _ = _make_app()
         # Health check
-        res = client.get(HEALTH_PATH)
+        res = client.get(HEALTH_PATH, headers=ALLOWED_HOST)
         assert res.status_code == 200
         assert res.json()["status"] == "ok"
 
@@ -87,7 +92,7 @@ class TestProtocol:
 
     def test_health_only_returns_permitted_fields(self) -> None:
         client, _ = _make_app()
-        resp = client.get(HEALTH_PATH)
+        resp = client.get(HEALTH_PATH, headers=ALLOWED_HOST)
         data = resp.json()
         assert set(data.keys()) <= {"status", "server_version", "mode"}
         assert "db_path" not in data
