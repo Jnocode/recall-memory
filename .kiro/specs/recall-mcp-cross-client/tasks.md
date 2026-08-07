@@ -265,4 +265,42 @@ Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memor
 > an import-origin read-back proving the sdist copy — not the checkout — was
 > executed. Evidence: `evidence/phase8-sdist-full-suite-readback.txt`.
 
+> **10.9 attempted 2026-08-07, deliberately NOT ticked.** The check is now
+> implemented and mutation-proven, but the run itself was incomplete, and 10.9
+> is only meaningful as a *complete* run immediately before a release.
+>
+> Implementation: `recall_memory_mcp/release_precheck.py` (network-free
+> decision logic) + `tests/test_release_precheck.py` (56 tests) + the live
+> driver `scripts/phase10_9_release_precheck.py`. The logic is fail-closed by
+> construction: completeness is measured against the *expected* source set, so
+> a source that is dropped or times out yields `INCOMPLETE`, never `PASS`; an
+> unreachable registry is `observed=false` rather than either a pass or a
+> naming violation; and a report is bound to a commit plus a 24 h expiry, so it
+> cannot authorise a release cut from a later commit.
+> `phase10_9_precheck_mutation_probe.py` injects 32 fail-open defects:
+> 30 must and do turn the suite RED, 2 are declared EQUIVALENT with proof and
+> each is paired with a caught partner. The probe's first run found two real
+> escapes (a pre-release inside the numeric range, and a pin with no parseable
+> constraint); both are now covered.
+>
+> Live result (`evidence/phase10.9-precheck.{txt,json}`, 2026-08-07T02:14:15Z,
+> HEAD `ad1f086`): **VERDICT INCOMPLETE, exit 2, tickable=false.**
+> - Name: `recall-memory-mcp` still 404 on PyPI JSON *and* Simple; `recall-mcp`
+>   still 200. GitHub owner path **unreachable**, so unverified this round.
+> - SDK: `mcp` latest on PyPI is `2.0.0`; the pin is `mcp>=2.0,<2.1` → still in
+>   range, so **Gate 3 is not reopened**.
+> - Client docs: only 3 of 10 vendor documents answered (Anthropic ×2,
+>   Microsoft ×1). `claude-remote-mcp` UNCHANGED; `claude-code-mcp` and
+>   `vscode-mcp-servers` show digest drift, but all 12 claims attributable to
+>   the reachable documents are still grounded, so no contract break is visible
+>   and **Gate 7 is not reopened by what was observed**. 26 of 38 claims could
+>   not be checked at all.
+> - Blocker: TCP connect to `developers.openai.com`, `kiro.dev`, `cursor.com`,
+>   `docs.windsurf.com`, `docs.devin.ai` and `api.github.com` timed out on all
+>   three attempts, from three different clients (urllib, curl, curl --ipv4).
+>   DNS resolves; the failure is at the network path, not DNS or auth.
+>
+> 10.9 must be re-run when those hosts are reachable, and in any case
+> immediately before publishing — the evidence file carries its own expiry.
+
 **Release stop condition:** 任一真host未通過、OAuth未通過、或只證明tool discovery而無cross-client read-back時，不得發布「安裝即同步記憶」宣稱。
