@@ -249,7 +249,7 @@ Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memor
 - [x] 10.6 fresh-context maker ≠ grader進行spec compliance、security、protocol review。
 - [ ] 10.7 PR CI全綠後merge/tag；trusted publishing。
 - [ ] 10.8 PyPI JSON、download digest、clean install、GitHub Release asset digest外部read-back。
-- [ ] 10.9 發布前再次驗名稱與官方client docs未變；若SDK/client契約變更，回Gate 3/7。
+- [x] 10.9 發布前再次驗名稱與官方client docs未變；若SDK/client契約變更，回Gate 3/7。
 
 > **10.3 re-verified 2026-08-07 after a real defect was found.** The original
 > tick rested on `evidence/phase7-sdist-asset-readback.txt`, which ran only
@@ -265,9 +265,35 @@ Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memor
 > an import-origin read-back proving the sdist copy — not the checkout — was
 > executed. Evidence: `evidence/phase8-sdist-full-suite-readback.txt`.
 
-> **10.9 attempted 2026-08-07, deliberately NOT ticked.** The check is now
-> implemented and mutation-proven, but the run itself was incomplete, and 10.9
-> is only meaningful as a *complete* run immediately before a release.
+> **10.9 COMPLETED 2026-08-07T07:30:39Z — verdict PASS, exit 0, `tickable: true`.**
+> The earlier attempt the same day was `INCOMPLETE` purely because six vendor
+> CDNs and `api.github.com` were unreachable from this host. Those hosts became
+> reachable again and the driver was re-run with no code change; the check now
+> reports a *complete* observation set:
+>
+> | Check | Result |
+> |---|---|
+> | Vendor documents expected / observed | **10 / 10** |
+> | Registry endpoints observed | **4 / 4** |
+> | `recall-memory-mcp` PyPI JSON + Simple | **404 / 404** — still unregistered |
+> | `recall-mcp` PyPI JSON | **200** — still the unrelated third-party project |
+> | `repos/Jnocode/recall-memory-mcp` | **404** — still absent under our owner |
+> | `mcp` SDK latest vs pin `mcp>=2.0,<2.1` | **2.0.0, in range → Gate 3 NOT reopened** |
+> | Vendor doc drift | 8 UNCHANGED, 2 DIGEST_DRIFT (`claude-code-mcp`, `vscode-mcp-servers`) |
+> | Claims checked / ungrounded | **38 / 0 → Gate 7 NOT reopened** |
+> | `reopened_gates` | `[]` |
+>
+> The two drifted vendor documents are re-renders, not contract changes: every
+> one of the 38 load-bearing claims re-grounded against the freshly fetched
+> bytes. Evidence `evidence/phase10.9-precheck.{txt,json}` is bound to
+> `head_commit 461efce` with a 24 h expiry.
+>
+> **What this tick does and does not authorise.** It records that the 10.9
+> check exists, is mutation-proven, and has been executed to completion with a
+> PASS. It is **not** a standing release authorisation: by design the report is
+> invalidated by any later commit (including the commit that carries this tick)
+> and by its expiry, so 10.9 MUST be re-run against the actual release commit
+> as the last step before 10.7/10.8. That is the mechanism working, not a gap.
 >
 > Implementation: `recall_memory_mcp/release_precheck.py` (network-free
 > decision logic) + `tests/test_release_precheck.py` (56 tests) + the live
@@ -283,24 +309,21 @@ Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memor
 > escapes (a pre-release inside the numeric range, and a pin with no parseable
 > constraint); both are now covered.
 >
-> Live result (`evidence/phase10.9-precheck.{txt,json}`, 2026-08-07T02:14:15Z,
-> HEAD `ad1f086`): **VERDICT INCOMPLETE, exit 2, tickable=false.**
-> - Name: `recall-memory-mcp` still 404 on PyPI JSON *and* Simple; `recall-mcp`
->   still 200. GitHub owner path **unreachable**, so unverified this round.
-> - SDK: `mcp` latest on PyPI is `2.0.0`; the pin is `mcp>=2.0,<2.1` → still in
->   range, so **Gate 3 is not reopened**.
-> - Client docs: only 3 of 10 vendor documents answered (Anthropic ×2,
->   Microsoft ×1). `claude-remote-mcp` UNCHANGED; `claude-code-mcp` and
->   `vscode-mcp-servers` show digest drift, but all 12 claims attributable to
->   the reachable documents are still grounded, so no contract break is visible
->   and **Gate 7 is not reopened by what was observed**. 26 of 38 claims could
->   not be checked at all.
-> - Blocker: TCP connect to `developers.openai.com`, `kiro.dev`, `cursor.com`,
->   `docs.windsurf.com`, `docs.devin.ai` and `api.github.com` timed out on all
->   three attempts, from three different clients (urllib, curl, curl --ipv4).
->   DNS resolves; the failure is at the network path, not DNS or auth.
+> Superseded first attempt, kept for the audit trail: the 02:14:15Z run against
+> HEAD `ad1f086` returned **INCOMPLETE, exit 2, tickable=false** because TCP
+> connect to `developers.openai.com`, `kiro.dev`, `cursor.com`,
+> `docs.windsurf.com`, `docs.devin.ai` and `api.github.com` timed out from three
+> different clients (urllib, curl, curl --ipv4) while DNS resolved normally —
+> only 3 of 10 documents and 3 of 4 registries answered. Nothing about the
+> project changed between the two runs and no code was modified; the difference
+> is purely host network reachability. That an unreachable source produced
+> `INCOMPLETE` rather than a pass is the fail-closed design being exercised for
+> real, and it is the reason the completeness counters are reported explicitly
+> rather than inferred from "no failures seen".
 >
-> 10.9 must be re-run when those hosts are reachable, and in any case
-> immediately before publishing — the evidence file carries its own expiry.
+> Regression battery re-run alongside the passing 10.9 (2026-08-07):
+> `tests/test_release_precheck.py` 56 passed; distribution suite
+> **788 passed, 5 skipped**; core authority suite **105 passed, 2 skipped**;
+> 10.9 mutation probe **32/32** fail-open defects detected.
 
 **Release stop condition:** 任一真host未通過、OAuth未通過、或只證明tool discovery而無cross-client read-back時，不得發布「安裝即同步記憶」宣稱。
