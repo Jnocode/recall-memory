@@ -57,7 +57,7 @@ from typing import Any, Final
 from . import __version__, provisioning, redaction
 from . import repository as repo
 from .service import SCOPE_ADMIN, SCOPE_READ, SCOPE_WRITE, CallerContext, RecallMemoryService
-from .settings import ServerMode, ServerSettings
+from .settings import DEFAULT_MEMORY_SCOPES, ServerMode, ServerSettings
 
 logger = logging.getLogger("recall_memory_mcp.authority")
 
@@ -72,7 +72,6 @@ TOKEN_SECRET_ENV: Final[str] = "RECALL_MCP_TOKEN_SECRET"
 
 LOCAL_ISSUER: Final[str] = "local-loopback"
 LOCAL_CLIENT_ID: Final[str] = "local-operator"
-DEFAULT_MEMORY_SCOPES: Final[tuple[str, ...]] = ("global",)
 LOCAL_OAUTH_SCOPES: Final[tuple[str, ...]] = (SCOPE_READ, SCOPE_WRITE, SCOPE_ADMIN)
 
 

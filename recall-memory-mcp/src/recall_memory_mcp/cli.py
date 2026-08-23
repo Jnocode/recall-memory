@@ -484,7 +484,7 @@ def _cmd_serve(
                 f"no ready authority database at target; run `{PROG} init` first",
                 EXIT_REFUSED,
             )
-        app = build_app(settings, env=merged)
+        app = build_app(settings, env=merged, memory_scopes=settings.memory_scopes)
     except (AuthorityNotInitialisedError, provisioning.ProvisioningError) as exc:
         return _fail(err, str(exc), EXIT_REFUSED)
     except (AuthorityError, SettingsError) as exc:

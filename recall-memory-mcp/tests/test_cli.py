@@ -561,6 +561,40 @@ def test_serve_runs_injectable_runner(tmp_path: Path, isolated_env) -> None:
     assert "starting recall-memory-mcp server" in out.getvalue()
 
 
+def test_serve_passes_explicit_memory_scopes_to_authority(
+    tmp_path: Path, isolated_env, monkeypatch
+) -> None:
+    import io
+
+    env = init_env(tmp_path, isolated_env)
+    assert run(["init"], env)[0] == cli.EXIT_OK
+    env["RECALL_MCP_MEMORY_SCOPES"] = "global,project:recall-ide-e2e"
+
+    captured: dict[str, Any] = {}
+    sentinel_app = object()
+
+    def fake_build_app(settings: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return sentinel_app
+
+    recorded: list[Any] = []
+
+    def fake_runner(app: Any, settings: Any, merged_env: dict[str, str]) -> None:
+        recorded.append(app)
+
+    monkeypatch.setattr(cli, "build_app", fake_build_app)
+    parser = cli.build_parser()
+    args = parser.parse_args(["serve"])
+    args.runner = fake_runner
+    out, err = io.StringIO(), io.StringIO()
+
+    code = args.handler(args, env, out, err)
+
+    assert code == cli.EXIT_OK, err.getvalue()
+    assert recorded == [sentinel_app]
+    assert captured["memory_scopes"] == ("global", "project:recall-ide-e2e")
+
+
 def test_every_test_in_this_module_is_top_level() -> None:
     """Guard against the nesting accident that hid the `serve` tests.
 

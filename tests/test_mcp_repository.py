@@ -7,6 +7,7 @@ import json
 import sqlite3
 import struct
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -17,8 +18,13 @@ from recall.mcp_repository import (
     PurgedMemoryReplayError,
     RecallMCPRepository,
     RevisionConflictError,
+    Vec0JournalModeRecoveryError,
 )
-from recall.migrations import BootstrapIdentity, migrate_database
+from recall.migrations import (
+    BootstrapIdentity,
+    MigrationVerificationError,
+    migrate_database,
+)
 
 BOOTSTRAP = BootstrapIdentity(
     owner_id="owner-repository-test",
@@ -31,7 +37,7 @@ MEMORY_ID = "memory-transaction-rollback"
 
 
 def _create_empty_legacy_db(path: Path) -> None:
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             """
@@ -72,7 +78,7 @@ def _create_empty_legacy_db(path: Path) -> None:
 def _create_migrated_authority(path: Path, backup_path: Path) -> None:
     _create_empty_legacy_db(path)
     migrate_database(path, backup_path=backup_path, bootstrap=BOOTSTRAP)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute(
             """
@@ -392,7 +398,7 @@ def test_add_dual_writes_active_and_building_without_changing_active_search(
 
 
 def _add_building_generation(path: Path) -> None:
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute(
             """
@@ -481,7 +487,9 @@ def _snapshot_memory_state(path: Path) -> dict[str, list[tuple[object, ...]]]:
             "ORDER BY operation, idempotency_key"
         ),
     }
-    with sqlite3.connect(path) as conn:
+    # sqlite3.Connection.__exit__ commits/rolls back but does not close.  These
+    # snapshots must release their WAL read lock before a maintenance cleanup.
+    with closing(sqlite3.connect(path)) as conn:
         return {
             name: conn.execute(sql, (MEMORY_ID,)).fetchall()
             for name, sql in queries.items()
@@ -492,7 +500,9 @@ def _attach_generation_vector_tables(path: Path) -> dict[int, str]:
     import sqlite_vec
 
     table_names: dict[int, str] = {}
-    with sqlite3.connect(path) as conn:
+    # sqlite-vec connections can participate in extension-owned reference
+    # cycles, so function return is not a reliable close boundary on Windows.
+    with closing(sqlite3.connect(path)) as conn:
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
@@ -535,6 +545,7 @@ def _attach_generation_vector_tables(path: Path) -> dict[int, str]:
                 ),
             )
             table_names[generation] = table_name
+        conn.commit()
     return table_names
 
 
@@ -594,6 +605,7 @@ def test_failed_building_generation_cleanup_preserves_active_generation(
             (table_names[2],),
         ).fetchone() == (0,)
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
 
     after_memory = _snapshot_memory_state(db_path)
     for key in ("memories", "keywords", "fts", "metadata", "events", "idempotency"):
@@ -665,7 +677,9 @@ def _snapshot_generation_state(
 ) -> dict[str, list[tuple[object, ...]]]:
     import sqlite_vec
 
-    with sqlite3.connect(path) as conn:
+    # Explicit close is significant: a context-manager exit alone can retain a
+    # WAL reader until GC, making journal-mode maintenance nondeterministic.
+    with closing(sqlite3.connect(path)) as conn:
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
@@ -847,6 +861,149 @@ def test_failed_building_cleanup_rolls_back_dropped_table_on_final_failure(
         )
 
     assert _snapshot_generation_state(db_path, table_names) == before
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+
+
+def test_failed_building_cleanup_with_active_reader_fails_closed(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("sqlite_vec")
+    db_path = tmp_path / "authority-failed-building-reader.db"
+    repository = _seed_replace_target(
+        db_path, tmp_path / "authority-failed-building-reader-backup.db"
+    )
+    table_names = _attach_generation_vector_tables(db_path)
+    before = _snapshot_generation_state(db_path, table_names)
+
+    reader = sqlite3.connect(db_path)
+    try:
+        reader.execute("BEGIN")
+        reader.execute("SELECT COUNT(*) FROM embedding_profiles").fetchone()
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            repository.fail_embedding_generation(
+                grant_id=ADMIN_GRANT_ID,
+                scope="project:recall",
+                generation=2,
+                failed_at="2026-08-02T04:08:00+00:00",
+            )
+    finally:
+        reader.rollback()
+        reader.close()
+
+    assert _snapshot_generation_state(db_path, table_names) == before
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+
+
+def test_repository_constructor_does_not_mutate_unrelated_sqlite_file(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "unrelated.db"
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute("CREATE TABLE unrelated(value TEXT)")
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+
+    RecallMCPRepository(db_path)
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+
+
+def test_repository_constructor_rejects_same_named_non_authority_schema(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "authority-lookalike.db"
+    with closing(sqlite3.connect(db_path)) as conn, conn:
+        for table_name in sorted({
+            "owners",
+            "client_grants",
+            "embedding_profiles",
+            "vector_tables",
+        }):
+            conn.execute(f'CREATE TABLE "{table_name}"(unrelated TEXT)')
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+
+    with pytest.raises(MigrationVerificationError):
+        RecallMCPRepository(db_path)
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+
+
+class _FailWalRestoreRepository(RecallMCPRepository):
+    def _restore_wal_after_vec0_maintenance(self, conn: sqlite3.Connection) -> None:
+        raise sqlite3.OperationalError("injected WAL restore failure")
+
+
+class _FailCleanupAndWalRestoreRepository(_FailWalRestoreRepository):
+    def _after_write_stage(self, stage: str, conn: sqlite3.Connection) -> None:
+        super()._after_write_stage(stage, conn)
+        if stage == "failed_generation_profile":
+            raise RuntimeError("injected cleanup failure before commit")
+
+
+def test_failed_building_cleanup_reports_committed_restore_failure_and_recovers(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("sqlite_vec")
+    db_path = tmp_path / "authority-failed-building-restore.db"
+    _seed_replace_target(db_path, tmp_path / "authority-failed-building-restore-backup.db")
+    table_names = _attach_generation_vector_tables(db_path)
+
+    with pytest.raises(Vec0JournalModeRecoveryError) as raised:
+        _FailWalRestoreRepository(db_path).fail_embedding_generation(
+            grant_id=ADMIN_GRANT_ID,
+            scope="project:recall",
+            generation=2,
+            failed_at="2026-08-02T04:08:00+00:00",
+        )
+
+    assert raised.value.cleanup_committed is True
+    assert isinstance(raised.value.recovery_error, sqlite3.OperationalError)
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+        assert conn.execute(
+            "SELECT status FROM embedding_profiles WHERE generation = 2"
+        ).fetchone() == ("FAILED",)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = ?", (table_names[2],)
+        ).fetchone() == (0,)
+
+    # A new authority repository is the crash/restart recovery boundary.
+    RecallMCPRepository(db_path)
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+
+
+def test_failed_building_cleanup_preserves_primary_error_when_restore_also_fails(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("sqlite_vec")
+    db_path = tmp_path / "authority-failed-building-double-failure.db"
+    _seed_replace_target(
+        db_path, tmp_path / "authority-failed-building-double-failure-backup.db"
+    )
+    table_names = _attach_generation_vector_tables(db_path)
+    before = _snapshot_generation_state(db_path, table_names)
+
+    with pytest.raises(Vec0JournalModeRecoveryError) as raised:
+        _FailCleanupAndWalRestoreRepository(db_path).fail_embedding_generation(
+            grant_id=ADMIN_GRANT_ID,
+            scope="project:recall",
+            generation=2,
+            failed_at="2026-08-02T04:08:00+00:00",
+        )
+
+    assert raised.value.cleanup_committed is False
+    assert isinstance(raised.value.__cause__, RuntimeError)
+    assert "cleanup failure before commit" in str(raised.value.__cause__)
+    assert isinstance(raised.value.recovery_error, sqlite3.OperationalError)
+    assert _snapshot_generation_state(db_path, table_names) == before
+
+    RecallMCPRepository(db_path)
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone() == ("wal",)
 
 
 def test_replace_rebuilds_all_indexes_and_increments_revision(tmp_path: Path) -> None:

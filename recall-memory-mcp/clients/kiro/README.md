@@ -43,6 +43,18 @@ Or copy `mcp.example.json` and edit it. `--write` only replaces the
 
 `url` must be HTTPS for a remote server; HTTP is only accepted for localhost.
 
+For a local IDE workspace, grant the authority only the exact project scopes
+that this server instance should expose. The default is deliberately
+`global`-only, so a `project:<slug>` call otherwise fails closed:
+
+```bash
+RECALL_MCP_MEMORY_SCOPES=global,project:recall recall-memory-mcp serve
+```
+
+Use explicit comma-separated `global` / `project:<slug>` values. Empty entries,
+wildcards, legacy scopes and malformed slugs are rejected at startup; do not
+use a broad `project:*` grant.
+
 ## Secrets stay out of the file
 
 No credential is ever written into `mcp.json`. Kiro expands `${VAR}` references,

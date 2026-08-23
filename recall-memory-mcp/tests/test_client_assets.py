@@ -372,6 +372,12 @@ def test_kiro_readme_documents_both_config_locations_and_env_approval() -> None:
     assert cc.TOKEN_ENV_VAR in text
 
 
+def test_kiro_readme_documents_exact_local_project_scope_allowlist() -> None:
+    text = _read(KIRO_README)
+    assert "RECALL_MCP_MEMORY_SCOPES=global,project:recall" in text
+    assert "do not\nuse a broad `project:*` grant" in text
+
+
 def test_ide_doc_covers_every_agent_with_its_real_config_path() -> None:
     _require(IDE_DOC)
     text = _read(IDE_DOC)

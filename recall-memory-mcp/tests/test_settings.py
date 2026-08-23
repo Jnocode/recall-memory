@@ -133,6 +133,62 @@ def test_remote_allowlist_entries_from_env_are_parsed_and_trimmed() -> None:
 
 
 # --------------------------------------------------------------------------
+# authority memory-scope allowlist (R1 / IDE project scope)
+# --------------------------------------------------------------------------
+
+
+def test_memory_scopes_default_to_global_only() -> None:
+    settings = ServerSettings.from_env(_env())
+    assert settings.memory_scopes == ("global",)
+
+
+def test_memory_scopes_are_explicit_trimmed_and_deduplicated() -> None:
+    settings = ServerSettings.from_env(
+        _env(
+            RECALL_MCP_MEMORY_SCOPES=(
+                " global, project:recall-ide-e2e, project:recall-ide-e2e, project:other "
+            )
+        )
+    )
+    assert settings.memory_scopes == (
+        "global",
+        "project:recall-ide-e2e",
+        "project:other",
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "   ",
+        "*",
+        "project:*",
+        "legacy:unscoped",
+        "project:Uppercase",
+        "global,,project:recall",
+        ",global",
+        "global,",
+    ],
+)
+def test_invalid_memory_scope_allowlist_fails_closed(value: str) -> None:
+    with pytest.raises(SettingsError):
+        ServerSettings.from_env(_env(RECALL_MCP_MEMORY_SCOPES=value))
+
+
+def test_memory_scope_allowlist_accepts_its_documented_maximum() -> None:
+    value = ",".join(f"project:p{index}" for index in range(64))
+    settings = ServerSettings.from_env(_env(RECALL_MCP_MEMORY_SCOPES=value))
+    assert len(settings.memory_scopes) == 64
+
+
+def test_memory_scope_allowlist_rejects_more_than_its_documented_maximum() -> None:
+    value = ",".join(f"project:p{index}" for index in range(65))
+    with pytest.raises(SettingsError, match="at most 64"):
+        ServerSettings.from_env(_env(RECALL_MCP_MEMORY_SCOPES=value))
+
+
+# --------------------------------------------------------------------------
 # mode invariants (R1.4 / R7.6 / R9.3)
 # --------------------------------------------------------------------------
 

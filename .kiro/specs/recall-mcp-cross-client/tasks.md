@@ -60,7 +60,7 @@
 
 Run：`python -m pytest -q tests/test_mcp_schema_migration.py tests/test_mcp_repository.py tests/test_mcp_concurrency.py tests/test_authority_lock.py`
 
-**Gate 1: PASS** (migration、transaction、index parity、concurrency全PASS；maker ≠ grader審查schema與data-loss風險。)
+**Gate 1: PASS (2026-08-09 re-verified)** (Windows SQLite 3.53.1 + `sqlite-vec==0.1.9`：fresh maintenance connection在載入sqlite-vec／讀schema前切離WAL，transaction內重驗授權與BUILDING狀態並原子DROP vec0 + cleanup，rollback、active-reader fail-closed、WAL restore/restart recovery均有real SQLite regression；authority suite 88 passed / 1 skipped；maker ≠ grader最終source review PASS。)
 
 
 ## Phase 2 — New MCP distribution skeleton
@@ -264,6 +264,21 @@ Run：`python -m pytest -q recall-memory-mcp/tests/test_protocol.py recall-memor
 > After-state: `721 passed, 16 skipped` from the unpacked non-Git sdist, with
 > an import-origin read-back proving the sdist copy — not the checkout — was
 > executed. Evidence: `evidence/phase8-sdist-full-suite-readback.txt`.
+>
+> **10.3/10.4 re-verified 2026-08-09 after Gate 1 source remediation.** An
+> isolated non-Git staging tree was built without overwriting the pre-existing
+> unowned `dist/` wheel. Both canonical-core and MCP wheel/sdist builds passed,
+> and `twine check` passed all four artifacts. The repaired source, core sdist,
+> and core wheel member `recall/mcp_repository.py` are byte-identical at SHA-256
+> `7c808a5bba5a217218339beb43da6b31e7383961ef6712cf30e84fa654c1a26b`, and the
+> wheel contains `Vec0JournalModeRecoveryError`. The safely unpacked non-Git MCP
+> sdist retained `tests/_support.py` and passed its full suite (**777 passed, 16
+> skipped**). A fresh `ci-venv` installed both wheels by explicit path; 10 core
+> modules and 21 MCP modules matched staging byte-for-byte in `site-packages`,
+> the console script passed, and `pip check` found no broken requirements.
+> Evidence: `runs/20260809T064319Z-package-regression/`. Initial read-back and
+> GNU-tar harness failures are retained there and are not counted as product
+> passes; their corrected independent retries are the completion basis.
 
 > **10.9 COMPLETED 2026-08-07T07:30:39Z — verdict PASS, exit 0, `tickable: true`.**
 > The earlier attempt the same day was `INCOMPLETE` purely because six vendor

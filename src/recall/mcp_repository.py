@@ -10,6 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _VECTOR_TABLE_NAME = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
+_VEC0_MAINTENANCE_TIMEOUT_SECONDS = 0.5
+_AUTHORITY_RECOVERY_TABLES = {
+    "owners",
+    "client_grants",
+    "embedding_profiles",
+    "vector_tables",
+}
 _VEC0_TABLE_SCHEMA = re.compile(
     r"\ACREATE\s+VIRTUAL\s+TABLE\s+"
     r"(?:IF\s+NOT\s+EXISTS\s+)?"
@@ -130,6 +137,18 @@ class RevisionConflictError(RuntimeError):
         self.current_revision = current_revision
 
 
+class Vec0JournalModeRecoveryError(RuntimeError):
+    """The vec0 transaction finished, but restoring canonical WAL mode failed."""
+
+    def __init__(
+        self, *, cleanup_committed: bool, recovery_error: BaseException
+    ) -> None:
+        state = "committed" if cleanup_committed else "rolled back"
+        super().__init__(f"vec0 cleanup {state}; failed to restore WAL journal mode")
+        self.cleanup_committed = cleanup_committed
+        self.recovery_error = recovery_error
+
+
 #: Finding M-1 (Phase 10 task 10.6 security review).  The shared read predicate
 #: below treats ``grant_kind='MIGRATION'`` as an authorization bypass so that a
 #: quarantined legacy import (whose ``oauth_scopes_json`` is ``[]`` by
@@ -152,6 +171,56 @@ class RecallMCPRepository:
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
+        # The canonical authority runs in WAL mode.  A hard process stop can
+        # occur after vec0 cleanup committed in temporary DELETE mode but before
+        # its immediate restore.  Constructor recovery makes that state
+        # self-healing on authority restart without consulting any private DB.
+        if self.db_path.is_file():
+            recovery = sqlite3.connect(self.db_path, timeout=30.0)
+            try:
+                table_names = {
+                    str(row[0])
+                    for row in recovery.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    ).fetchall()
+                }
+                if _AUTHORITY_RECOVERY_TABLES.issubset(table_names):
+                    # Same-named lookalike tables are not sufficient authority
+                    # identity. Reuse the migration manifest before making the
+                    # persistent journal-mode repair.
+                    vector_schemas = recovery.execute(
+                        """
+                        SELECT sql FROM sqlite_master
+                        WHERE type = 'table' AND sql IS NOT NULL
+                        """
+                    ).fetchall()
+                    if any(_is_vec0_table_schema(row[0]) for row in vector_schemas):
+                        recovery.enable_load_extension(True)
+                        try:
+                            import sqlite_vec
+
+                            sqlite_vec.load(recovery)
+                        finally:
+                            recovery.enable_load_extension(False)
+                    from .migrations import verify_migrated_database
+
+                    verify_migrated_database(recovery)
+                    recovered_mode = str(
+                        recovery.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                    ).lower()
+                    if recovered_mode != "wal":
+                        raise sqlite3.OperationalError(
+                            "failed to recover canonical WAL journal mode"
+                        )
+            finally:
+                recovery.close()
+
+    def _restore_wal_after_vec0_maintenance(self, conn: sqlite3.Connection) -> None:
+        """Restore and verify canonical WAL mode; separated as a test seam."""
+
+        restored_mode = str(conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+        if restored_mode != "wal":
+            raise sqlite3.OperationalError("failed to restore WAL after vec0 maintenance")
 
     def _readonly_connection(self) -> sqlite3.Connection:
         uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
@@ -1161,8 +1230,92 @@ class RecallMCPRepository:
         ):
             raise ValueError("generation must be a positive integer")
 
-        conn = self._write_connection()
+        # sqlite-vec 0.1.9 cannot reliably destroy a vec0 table from a fresh
+        # connection while the database is in WAL mode. Authorize and decide
+        # whether physical-table maintenance is needed before taking the
+        # database-wide journal-mode lock. The transaction below repeats every
+        # authorization/state check to avoid a preflight TOCTOU.
+        preflight = self._readonly_connection()
         try:
+            preflight_grant = preflight.execute(
+                """
+                SELECT owner_id
+                FROM client_grants
+                WHERE grant_id = ?
+                  AND grant_kind = 'OAUTH'
+                  AND revoked_at IS NULL
+                  AND unlinked_at IS NULL
+                  AND EXISTS (
+                      SELECT 1 FROM json_each(oauth_scopes_json)
+                      WHERE type = 'text' AND value = 'memory:admin'
+                  )
+                  AND EXISTS (
+                      SELECT 1 FROM json_each(memory_scope_patterns_json)
+                      WHERE type = 'text' AND value = ?
+                  )
+                """,
+                (grant_id, scope),
+            ).fetchone()
+            if preflight_grant is None:
+                raise PermissionError("not authorized")
+            preflight_owner_id = str(preflight_grant[0])
+            preflight_state = preflight.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM embedding_profiles
+                     WHERE owner_id = ? AND scope = ? AND status = 'ACTIVE'),
+                    EXISTS (
+                        SELECT 1 FROM embedding_profiles
+                        WHERE owner_id = ? AND scope = ? AND generation = ?
+                          AND status = 'BUILDING'
+                    )
+                """,
+                (
+                    preflight_owner_id,
+                    scope,
+                    preflight_owner_id,
+                    scope,
+                    generation,
+                ),
+            ).fetchone()
+            if preflight_state != (1, 1):
+                raise PermissionError("not authorized")
+        finally:
+            preflight.close()
+
+        conn: sqlite3.Connection | None = None
+        restore_wal = False
+        cleanup_committed = False
+        primary_error: BaseException | None = None
+        primary_traceback = None
+        try:
+            # This must be a genuinely fresh connection. Its first SQL switches
+            # away from WAL before sqlite-vec is loaded or the schema is
+            # inspected; otherwise vec0 xDestroy returns a generic SQL logic
+            # error on the supported Windows stack. Every authorized BUILDING
+            # cleanup uses this path so registry changes after preflight cannot
+            # select an unsafe WAL connection.
+            conn = sqlite3.connect(
+                self.db_path, timeout=_VEC0_MAINTENANCE_TIMEOUT_SECONDS
+            )
+            switched_mode = str(
+                conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+            ).lower()
+            restore_wal = switched_mode == "delete"
+            if not restore_wal:
+                raise sqlite3.OperationalError(
+                    "failed to enter vec0 maintenance journal mode"
+                )
+            conn.enable_load_extension(True)
+            try:
+                import sqlite_vec
+
+                sqlite_vec.load(conn)
+            finally:
+                conn.enable_load_extension(False)
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=500")
+
             conn.execute("BEGIN IMMEDIATE")
             grant = conn.execute(
                 """
@@ -1286,11 +1439,32 @@ class RecallMCPRepository:
                 raise RuntimeError("BUILDING generation changed during cleanup")
             self._after_write_stage("failed_generation_profile", conn)
             conn.commit()
-        except BaseException:
-            conn.rollback()
-            raise
+            cleanup_committed = True
+        except BaseException as error:
+            if conn is not None:
+                conn.rollback()
+            primary_error = error
+            primary_traceback = error.__traceback__
+
+        try:
+            if restore_wal and conn is not None:
+                try:
+                    # Restore on the same open maintenance connection to make
+                    # the post-commit crash window as small as SQLite permits.
+                    self._restore_wal_after_vec0_maintenance(conn)
+                except BaseException as recovery_error:
+                    wrapped = Vec0JournalModeRecoveryError(
+                        cleanup_committed=cleanup_committed,
+                        recovery_error=recovery_error,
+                    )
+                    if primary_error is not None:
+                        raise wrapped from primary_error
+                    raise wrapped from recovery_error
+            if primary_error is not None:
+                raise primary_error.with_traceback(primary_traceback)
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
     def remove_memory(
         self,

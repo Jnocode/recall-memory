@@ -9,6 +9,7 @@ never depend on the machine that runs them.
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from enum import Enum
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from . import redaction
+from .models import SCOPE_PATTERN
 
 APP_DIR_NAME: Final[str] = "recall-memory-mcp"
 DB_FILE_NAME: Final[str] = "authority.db"
@@ -26,6 +28,8 @@ DEFAULT_PORT: Final[int] = 8765
 DEFAULT_MAX_BODY_BYTES: Final[int] = 1 << 20  # 1 MiB
 DEFAULT_TOOL_TIMEOUT_SECONDS: Final[float] = 30.0
 DEFAULT_MAX_CONCURRENT_CALLS: Final[int] = 8
+DEFAULT_MEMORY_SCOPES: Final[tuple[str, ...]] = ("global",)
+MAX_MEMORY_SCOPES: Final[int] = 64
 
 LOOPBACK_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "::1", "localhost"})
 
@@ -104,6 +108,33 @@ def _csv(env: Mapping[str, str], name: str) -> tuple[str, ...] | None:
     return items
 
 
+def _memory_scopes(env: Mapping[str, str]) -> tuple[str, ...]:
+    """Parse the exact authority scope allowlist without fail-open defaults.
+
+    Unlike optional host/origin allowlists, explicitly setting this variable to
+    an empty or malformed CSV is an error.  A typo must never silently widen or
+    fall back to ``global``.
+    """
+
+    name = "MEMORY_SCOPES"
+    key = ENV_PREFIX + name
+    if key not in env:
+        return DEFAULT_MEMORY_SCOPES
+    raw = env[key].strip()
+    if not raw:
+        raise SettingsError(f"{key} must not be empty")
+    parts = raw.split(",")
+    if any(not part.strip() for part in parts):
+        raise SettingsError(f"{key} must not contain empty entries")
+    items = tuple(part.strip() for part in parts)
+    if len(items) > MAX_MEMORY_SCOPES:
+        raise SettingsError(f"{key} must contain at most {MAX_MEMORY_SCOPES} entries")
+    invalid = tuple(scope for scope in items if re.fullmatch(SCOPE_PATTERN, scope) is None)
+    if invalid:
+        raise SettingsError(f"{key} contains an invalid scope")
+    return tuple(dict.fromkeys(items))
+
+
 def _default_config_dir(env: Mapping[str, str]) -> Path:
     appdata = env.get("APPDATA")
     if appdata and appdata.strip():
@@ -128,6 +159,7 @@ class ServerSettings:
     allowed_hosts: tuple[str, ...]
     allowed_origins: tuple[str, ...]
     require_auth: bool
+    memory_scopes: tuple[str, ...] = DEFAULT_MEMORY_SCOPES
     public_url: str | None = None
     oauth_issuer: str | None = None
     oauth_client_secret: str | None = None
@@ -202,6 +234,7 @@ class ServerSettings:
             allowed_hosts=tuple(allowed_hosts),
             allowed_origins=tuple(allowed_origins),
             require_auth=require_auth,
+            memory_scopes=_memory_scopes(env),
             public_url=public_url,
             oauth_issuer=oauth_issuer,
             oauth_client_secret=_get(env, "OAUTH_CLIENT_SECRET"),
@@ -254,6 +287,7 @@ __all__ = [
     "APP_DIR_NAME",
     "CONFIG_FILE_NAME",
     "DB_FILE_NAME",
+    "DEFAULT_MEMORY_SCOPES",
     "DEFAULT_HOST",
     "DEFAULT_PORT",
     "ENV_PREFIX",
