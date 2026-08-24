@@ -378,6 +378,17 @@ def test_kiro_readme_documents_exact_local_project_scope_allowlist() -> None:
     assert "do not\nuse a broad `project:*` grant" in text
 
 
+def test_ide_doc_requires_explicit_scope_and_never_claims_workspace_inference() -> None:
+    """MCP has no standard workspace field for the authority to infer a slug from."""
+
+    _require(IDE_DOC)
+    text = _read(IDE_DOC)
+    assert "RECALL_MCP_MEMORY_SCOPES=global,project:recall" in text
+    assert re.search(r"must pass\s+`scope=\"project:recall\"`", text)
+    assert "does not infer a project slug from the MCP connection" in text
+    assert "derives `project:<slug>` from the workspace" not in text
+
+
 def test_ide_doc_covers_every_agent_with_its_real_config_path() -> None:
     _require(IDE_DOC)
     text = _read(IDE_DOC)

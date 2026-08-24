@@ -201,16 +201,27 @@ MCP-spec documentation works unchanged. What is *not* accepted is omitting
 
 ## Scope binding for IDE agents
 
-An IDE agent should read and write the project scope of the repository it has
-open, and fall back to `global` for user-wide preferences.
+An IDE agent should read and write the exact project scope for the repository it
+has open, and use `global` only for genuinely user-wide preferences. For this
+repository, start the local authority with an exact allowlist:
 
-Recall derives `project:<slug>` from the workspace the agent reports, and the
-grant must already authorize that scope — an agent cannot widen its own access
-by naming a different scope in a request. Unauthorized scopes fail closed with
-a uniform not-authorized error that leaks neither content nor the existence of
-an id.
+```bash
+RECALL_MCP_MEMORY_SCOPES=global,project:recall recall-memory-mcp serve
+```
 
-If an agent reports no workspace, only `global` is available to it.
+The server does not infer a project slug from the MCP connection: MCP
+Streamable HTTP has no standard workspace field that Recall can trust for that
+purpose. Every IDE tool call for this repository must pass
+`scope="project:recall"`; put that rule in the host's project instructions. The
+verified grant and the authority allowlist must both authorize the same exact
+scope. Naming another scope in a request cannot widen either boundary and fails
+closed with a uniform not-authorized error.
+
+Do not grant `project:*`. Add another exact `project:<slug>` value to
+`RECALL_MCP_MEMORY_SCOPES` only when that workspace should share this authority.
+If a host has no project rule, use `global` only when the caller is authorized
+for it; absence of workspace context never silently selects or creates a
+project scope.
 
 ## Steering the agents
 
