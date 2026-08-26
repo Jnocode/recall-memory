@@ -562,7 +562,10 @@ def _validate_passed(
             errors.append(f"{call_label}: must be an object")
             continue
         _unknown_fields(call, _CALL_FIELDS, call_label, errors)
-        if call.get("outcome") == "passed":
+        tool = call.get("tool")
+        if not isinstance(tool, str) or tool not in MVP_TOOLS:
+            errors.append(f"{call_label}.tool: passed client calls must name an MVP tool")
+        elif call.get("outcome") == "passed":
             successful += 1
         if not _valid_timestamp(call.get("captured_at")):
             errors.append(f"{call_label}.captured_at: must be offset-aware RFC3339")

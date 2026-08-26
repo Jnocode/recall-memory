@@ -319,6 +319,19 @@ def test_pass_requires_real_call_not_only_discovery(tmp_path):
     assert any("successful tool call" in error for error in _errors(document, tmp_path))
 
 
+@pytest.mark.parametrize("invalid_tool", ["invented_tool", "", None, ["memory_status"]])
+def test_pass_rejects_successful_call_to_non_mvp_tool(tmp_path, invalid_tool):
+    document = _passed_matrix(tmp_path)
+    document["clients"][0]["calls"][0]["tool"] = invalid_tool
+    _rewrite_artifact(document, tmp_path, "call", tool=invalid_tool)
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert any("MVP tool" in error for error in report.errors)
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+
+
 def test_pass_requires_stateful_post_get_delete_and_same_session(tmp_path):
     document = _passed_matrix(tmp_path)
     lifecycle = document["clients"][0]["session_lifecycle"]
