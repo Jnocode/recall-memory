@@ -177,6 +177,16 @@ _TRACE_FIELDS: Final[dict[str, frozenset[str]]] = {
 }
 
 
+class _CLIUsageError(Exception):
+    """Internal marker for redacted, machine-readable CLI usage failures."""
+
+
+class _MachineReadableArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        del message  # argparse messages may echo a secret-bearing raw argument.
+        raise _CLIUsageError
+
+
 @dataclass(frozen=True)
 class MatrixValidationReport:
     """Machine-readable, immutable validation result."""
@@ -223,6 +233,12 @@ def _is_hash(value: Any) -> bool:
 
 def _is_observed_text(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower() not in _PLACEHOLDERS
+
+
+def _safe_requirement_client_id(value: str) -> str:
+    if not _is_observed_text(value) or redact_text(value) != value:
+        raise argparse.ArgumentTypeError("CLIENT_ID must be safe non-placeholder text")
+    return value
 
 
 def _string_list(value: Any) -> list[str] | None:
@@ -903,11 +919,13 @@ def validate_matrix_file(
 def main(argv: list[str] | None = None) -> int:
     """Validate a matrix non-interactively and emit one JSON report.
 
-    Exit 0 means contract/hash/leak/semantic validation passed.  It does not
-    mean Gate 7 or Gate 8 passed; callers must inspect the explicit pass lists.
+    Without gate requirements, exit 0 means only contract/hash/leak/semantic
+    validation passed.  Callers that need a Gate 7/8 precondition must name the
+    required passed and external-read-back clients explicitly; a structurally
+    valid matrix missing any such client exits 2.
     """
 
-    parser = argparse.ArgumentParser(
+    parser = _MachineReadableArgumentParser(
         prog="python -m recall_memory_mcp.interop_evidence",
         description=(
             "Validate typed interop evidence. A valid all-not_run matrix is not "
@@ -920,20 +938,69 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="root for relative evidence paths (defaults to matrix directory)",
     )
-    args = parser.parse_args(argv)
-    report = validate_matrix_file(args.matrix, artifact_root=args.artifact_root)
-    print(
-        json.dumps(
-            {
-                "ok": report.ok,
-                "errors": list(report.errors),
-                "passed_client_ids": list(report.passed_client_ids),
-                "external_read_back_client_ids": list(report.external_read_back_client_ids),
-            },
-            indent=2,
-        )
+    parser.add_argument(
+        "--require-passed-client",
+        action="append",
+        default=[],
+        metavar="CLIENT_ID",
+        type=_safe_requirement_client_id,
+        help="require CLIENT_ID in passed_client_ids; repeat for multiple clients",
     )
-    return 0 if report.ok else 1
+    parser.add_argument(
+        "--require-external-read-back-client",
+        action="append",
+        default=[],
+        metavar="CLIENT_ID",
+        type=_safe_requirement_client_id,
+        help=(
+            "require CLIENT_ID in external_read_back_client_ids; repeat for "
+            "multiple writer clients"
+        ),
+    )
+    try:
+        args = parser.parse_args(argv)
+    except _CLIUsageError:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "errors": ["invalid command-line arguments"],
+                    "passed_client_ids": [],
+                    "external_read_back_client_ids": [],
+                },
+                indent=2,
+            )
+        )
+        return 64
+    report = validate_matrix_file(args.matrix, artifact_root=args.artifact_root)
+
+    required_passed = set(args.require_passed_client)
+    required_read_back = set(args.require_external_read_back_client)
+    missing_passed = sorted(required_passed - set(report.passed_client_ids))
+    missing_read_back = sorted(required_read_back - set(report.external_read_back_client_ids))
+    gate_requested = bool(required_passed or required_read_back)
+
+    payload: dict[str, Any] = {
+        "ok": report.ok,
+        "errors": list(report.errors),
+        "passed_client_ids": list(report.passed_client_ids),
+        "external_read_back_client_ids": list(report.external_read_back_client_ids),
+    }
+    if gate_requested:
+        payload.update(
+            {
+                "requirements_met": report.ok and not missing_passed and not missing_read_back,
+                "missing_passed_client_ids": missing_passed,
+                "missing_external_read_back_client_ids": missing_read_back,
+            }
+        )
+    print(json.dumps(payload, indent=2))
+
+    if not report.ok:
+        return 1
+    if missing_passed or missing_read_back:
+        return 2
+    return 0
 
 
 __all__ = [

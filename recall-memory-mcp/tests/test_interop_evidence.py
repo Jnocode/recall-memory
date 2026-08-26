@@ -558,3 +558,148 @@ def test_noninteractive_cli_emits_machine_report_and_exit_code(tmp_path, capsys)
     output = json.loads(capsys.readouterr().out)
     assert output["ok"] is False
     assert output["passed_client_ids"] == []
+
+
+def test_cli_gate_requirement_fails_closed_for_valid_not_run_matrix(tmp_path, capsys):
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text(json.dumps(_matrix()), encoding="utf-8")
+
+    assert main(
+        [
+            str(matrix),
+            "--artifact-root",
+            str(tmp_path),
+            "--require-passed-client",
+            "kiro",
+        ]
+    ) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is True
+    assert output["requirements_met"] is False
+    assert output["missing_passed_client_ids"] == ["kiro"]
+    assert output["missing_external_read_back_client_ids"] == []
+
+
+def test_cli_gate_requirement_accepts_only_observed_passed_client(tmp_path, capsys):
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text(json.dumps(_passed_matrix(tmp_path)), encoding="utf-8")
+
+    assert main(
+        [
+            str(matrix),
+            "--artifact-root",
+            str(tmp_path),
+            "--require-passed-client",
+            "kiro",
+        ]
+    ) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["requirements_met"] is True
+    assert output["missing_passed_client_ids"] == []
+
+    assert main(
+        [
+            str(matrix),
+            "--artifact-root",
+            str(tmp_path),
+            "--require-passed-client",
+            "chatgpt_desktop",
+        ]
+    ) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["requirements_met"] is False
+    assert output["missing_passed_client_ids"] == ["chatgpt_desktop"]
+
+
+def test_cli_external_read_back_requirement_is_separate_from_client_pass(tmp_path, capsys):
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text(json.dumps(_valid_external_readback_matrix(tmp_path)), encoding="utf-8")
+
+    assert main(
+        [
+            str(matrix),
+            "--artifact-root",
+            str(tmp_path),
+            "--require-passed-client",
+            "kiro",
+            "--require-passed-client",
+            "claude_desktop",
+            "--require-external-read-back-client",
+            "kiro",
+        ]
+    ) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["requirements_met"] is True
+    assert output["missing_external_read_back_client_ids"] == []
+
+    assert main(
+        [
+            str(matrix),
+            "--artifact-root",
+            str(tmp_path),
+            "--require-external-read-back-client",
+            "claude_desktop",
+        ]
+    ) == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["requirements_met"] is False
+    assert output["missing_passed_client_ids"] == []
+    assert output["missing_external_read_back_client_ids"] == ["claude_desktop"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [],
+        ["matrix.json", "--require-passed-client"],
+        ["matrix.json", "--unknown-flag"],
+    ],
+)
+def test_cli_usage_error_is_machine_readable_and_distinct_from_unmet_gate(argv, capsys):
+    assert main(argv) == 64
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "ok": False,
+        "errors": ["invalid command-line arguments"],
+        "passed_client_ids": [],
+        "external_read_back_client_ids": [],
+    }
+
+
+@pytest.mark.parametrize(
+    "unsafe_client_id",
+    [
+        "",
+        "unknown",
+        "C:/Users/Jun/private.txt",
+        "/tmp/private.txt",
+        "https://user:hunter2@example.invalid/mcp",
+        "Authorization: Bearer unsafe-token-value-1234567890",
+    ],
+)
+def test_cli_requirement_client_id_rejects_unsafe_values_without_echo(unsafe_client_id, capsys):
+    assert main(["matrix.json", "--require-passed-client", unsafe_client_id]) == 64
+    captured = capsys.readouterr()
+    if unsafe_client_id:
+        assert unsafe_client_id not in captured.out
+        assert unsafe_client_id not in captured.err
+    assert json.loads(captured.out)["errors"] == ["invalid command-line arguments"]
+
+
+def test_cli_invalid_matrix_precedes_missing_gate_requirement(tmp_path, capsys):
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text("not json", encoding="utf-8")
+
+    assert main(
+        [
+            str(matrix),
+            "--require-passed-client=kiro",
+            "--require-external-read-back-client=kiro",
+        ]
+    ) == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is False
+    assert output["requirements_met"] is False
+    assert output["missing_passed_client_ids"] == ["kiro"]
+    assert output["missing_external_read_back_client_ids"] == ["kiro"]
