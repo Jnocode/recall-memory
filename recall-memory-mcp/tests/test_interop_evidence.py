@@ -303,6 +303,34 @@ def test_current_not_run_shape_is_valid_and_makes_no_pass_claim(tmp_path):
     assert report.external_read_back_client_ids == ()
 
 
+@pytest.mark.parametrize("invalid", [[], {}], ids=["list", "object"])
+@pytest.mark.parametrize(
+    ("target", "error_fragment"),
+    [
+        ("deployment_mode", "unsupported deployment mode"),
+        ("client_status", ".status: invalid status"),
+        ("readback_status", "external_read_back.status: invalid status"),
+    ],
+)
+def test_unhashable_enum_values_fail_closed_without_raising(
+    tmp_path, invalid, target, error_fragment
+):
+    document = _matrix()
+    if target == "deployment_mode":
+        document["authority"]["deployment_mode"] = invalid
+    elif target == "client_status":
+        document["clients"][0]["status"] = invalid
+    else:
+        document["clients"][0]["external_read_back"]["status"] = invalid
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+    assert report.external_read_back_client_ids == ()
+    assert any(error_fragment in error for error in report.errors)
+
+
 def test_complete_real_host_shape_is_structurally_valid(tmp_path):
     report = validate_matrix_document(_passed_matrix(tmp_path), artifact_root=tmp_path)
     assert report.ok is True, report.errors
@@ -653,6 +681,33 @@ def test_external_read_back_binds_writer_and_reader_call_traces(tmp_path):
     assert report.ok is True, report.errors
     assert report.passed_client_ids == ("kiro", "claude_desktop")
     assert report.external_read_back_client_ids == ("kiro",)
+
+
+@pytest.mark.parametrize("status", ["not_run", "blocked", "failed"])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reader_client_id", "claude_desktop"),
+        ("memory_id", "mem-canary"),
+        ("revision", 1),
+        ("content_sha256", "d" * 64),
+        ("authority_endpoint_identity_sha256", AUTHORITY_HASH),
+        ("artifact_ids", ["unreferenced-readback-trace"]),
+    ],
+)
+def test_nonpassed_external_read_back_rejects_smuggled_observations(
+    tmp_path, status, field, value
+):
+    document = _passed_matrix(tmp_path)
+    document["clients"][0]["external_read_back"]["status"] = status
+    document["clients"][0]["external_read_back"][field] = value
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+    assert report.external_read_back_client_ids == ()
+    assert any("non-passed read-back observations must be null/empty" in error for error in report.errors)
 
 
 @pytest.mark.parametrize("writer_status", ["blocked", "failed"])

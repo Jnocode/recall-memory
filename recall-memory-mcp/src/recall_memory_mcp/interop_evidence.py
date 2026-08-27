@@ -335,7 +335,7 @@ def _is_loopback_host(host: str) -> bool:
 
 def _validate_configured_authority(authority: Mapping[str, Any], errors: list[str]) -> None:
     mode = authority.get("deployment_mode")
-    if mode not in ALLOWED_DEPLOYMENT_MODES:
+    if not isinstance(mode, str) or mode not in ALLOWED_DEPLOYMENT_MODES:
         errors.append("matrix.authority.deployment_mode: unsupported deployment mode")
         return
     if mode == "not_configured":
@@ -838,10 +838,18 @@ def _validate_readback(
         return False
     _unknown_fields(readback, _READBACK_FIELDS, f"{label}.external_read_back", errors)
     status = readback.get("status")
-    if status not in ALLOWED_STATUS:
+    if not isinstance(status, str) or status not in ALLOWED_STATUS:
         errors.append(f"{label}.external_read_back.status: invalid status")
         return False
     if status != "passed":
+        observation_fields = _READBACK_FIELDS - {"status", "artifact_ids"}
+        if (
+            any(readback.get(field) is not None for field in observation_fields)
+            or readback.get("artifact_ids") != []
+        ):
+            errors.append(
+                f"{label}.external_read_back: non-passed read-back observations must be null/empty"
+            )
         return False
 
     if client.get("status") != "passed":
@@ -1080,7 +1088,7 @@ def validate_matrix_document(
         label = f"matrix.clients[{index}]({client_id!r})"
         client_error_start = len(errors)
         status = client.get("status")
-        if status not in ALLOWED_STATUS:
+        if not isinstance(status, str) or status not in ALLOWED_STATUS:
             errors.append(f"{label}.status: invalid status")
 
         scope = client.get("scope_mapping")
@@ -1130,7 +1138,7 @@ def validate_matrix_document(
             )
             if len(errors) == client_error_start and isinstance(client_id, str):
                 passed.append(client_id)
-        elif status in {"blocked", "failed"}:
+        elif status == "blocked" or status == "failed":
             if evidence is None or not _valid_timestamp(evidence.get("captured_at")) or not artifacts:
                 errors.append(f"{label}: {status} requires timestamped hashed evidence")
 
