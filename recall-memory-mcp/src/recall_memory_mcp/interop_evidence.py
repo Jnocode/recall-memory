@@ -11,17 +11,24 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Final, Mapping
+from urllib.parse import urlsplit
 
 from .redaction import redact_text
 
 SCHEMA_VERSION: Final[str] = "1.1.0"
 ALLOWED_STATUS: Final[frozenset[str]] = frozenset({"not_run", "blocked", "failed", "passed"})
+ALLOWED_DEPLOYMENT_MODES: Final[frozenset[str]] = frozenset(
+    {"not_configured", "local", "tunnel_dev", "remote"}
+)
+GATE_MAX_EVIDENCE_AGE: Final[timedelta] = timedelta(hours=24)
+GATE_MAX_FUTURE_SKEW: Final[timedelta] = timedelta(minutes=5)
 MVP_TOOLS: Final[frozenset[str]] = frozenset(
     {
         "memory_search",
@@ -233,6 +240,32 @@ def _valid_timestamp(value: Any) -> bool:
     return _parse_timestamp(value) is not None
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _validate_timestamp_freshness(
+    value: Any,
+    *,
+    where: str,
+    reference_time: datetime | None,
+    max_age: timedelta | None,
+    max_future_skew: timedelta,
+    errors: list[str],
+) -> None:
+    if reference_time is None or max_age is None:
+        return
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        return
+    if parsed < reference_time - max_age:
+        hours = int(max_age.total_seconds() // 3600)
+        errors.append(f"{where}: evidence is older than the {hours}-hour gate window")
+    if parsed > reference_time + max_future_skew:
+        minutes = int(max_future_skew.total_seconds() // 60)
+        errors.append(f"{where}: evidence is more than {minutes} minutes in the future")
+
+
 def _is_hash(value: Any) -> bool:
     return isinstance(value, str) and _HASH_RE.fullmatch(value) is not None
 
@@ -266,6 +299,66 @@ def _scan_matrix_values(value: Any, where: str, errors: list[str]) -> None:
         errors.append(f"{where}: unsafe secret, absolute path, credential URL, or traceback content")
 
 
+def _is_loopback_host(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _validate_configured_authority(authority: Mapping[str, Any], errors: list[str]) -> None:
+    mode = authority.get("deployment_mode")
+    if mode not in ALLOWED_DEPLOYMENT_MODES:
+        errors.append("matrix.authority.deployment_mode: unsupported deployment mode")
+        return
+    if mode == "not_configured":
+        for field in ("endpoint", "endpoint_identity_sha256", "server_version"):
+            if authority.get(field) is not None:
+                errors.append(f"matrix.authority.{field}: must be null when not_configured")
+        return
+
+    endpoint = authority.get("endpoint")
+    if not _is_observed_text(endpoint):
+        errors.append("matrix.authority.endpoint: configured authority requires an endpoint")
+    else:
+        assert isinstance(endpoint, str)
+        if any(ord(character) < 32 or ord(character) == 127 for character in endpoint):
+            errors.append("matrix.authority.endpoint: control characters are forbidden")
+        if "?" in endpoint:
+            errors.append("matrix.authority.endpoint: must not contain query parameters")
+        if "#" in endpoint:
+            errors.append("matrix.authority.endpoint: must not contain a fragment")
+        try:
+            parsed = urlsplit(endpoint)
+            host = parsed.hostname
+            parsed.port  # Force validation of malformed/out-of-range ports.
+        except ValueError:
+            parsed = None
+            host = None
+            errors.append("matrix.authority.endpoint: malformed endpoint URL")
+        if parsed is not None:
+            if parsed.username is not None or parsed.password is not None:
+                errors.append("matrix.authority.endpoint: credentials are forbidden")
+            if parsed.path != "/mcp":
+                errors.append("matrix.authority.endpoint: path must be exactly /mcp")
+            if mode in {"tunnel_dev", "remote"} and parsed.scheme.lower() != "https":
+                errors.append(f"matrix.authority.endpoint: {mode} requires an HTTPS endpoint")
+            if mode == "local":
+                if parsed.scheme.lower() not in {"http", "https"}:
+                    errors.append("matrix.authority.endpoint: local mode requires HTTP or HTTPS")
+                if host is None or not _is_loopback_host(host):
+                    errors.append("matrix.authority.endpoint: local mode requires a loopback host")
+            elif not host:
+                errors.append("matrix.authority.endpoint: configured authority requires a hostname")
+
+    if not _is_hash(authority.get("endpoint_identity_sha256")):
+        errors.append("matrix.authority.endpoint_identity_sha256: configured authority requires SHA-256")
+    if not _is_observed_text(authority.get("server_version")):
+        errors.append("matrix.authority.server_version: configured authority requires an observed server version")
+
+
 def _safe_artifact_path(root: Path, raw_path: Any) -> tuple[Path | None, str | None]:
     if not isinstance(raw_path, str) or not raw_path:
         return None, "artifact path must be a non-empty relative POSIX path"
@@ -290,6 +383,9 @@ def _validate_artifacts(
     *,
     client_label: str,
     artifact_root: Path | None,
+    evidence_reference_time: datetime | None,
+    max_evidence_age: timedelta | None,
+    max_future_skew: timedelta,
     errors: list[str],
 ) -> tuple[dict[str, Mapping[str, Any]], dict[str, Mapping[str, Any]]]:
     _unknown_fields(evidence, _EVIDENCE_FIELDS, f"{client_label}.evidence", errors)
@@ -297,6 +393,17 @@ def _validate_artifacts(
     if artifacts_raw is None:
         errors.append(f"{client_label}.evidence.artifacts: must be a list")
         return {}, {}
+    if artifacts_raw:
+        if not _valid_timestamp(evidence.get("captured_at")):
+            errors.append(f"{client_label}.evidence.captured_at: must be offset-aware RFC3339")
+        _validate_timestamp_freshness(
+            evidence.get("captured_at"),
+            where=f"{client_label}.evidence.captured_at",
+            reference_time=evidence_reference_time,
+            max_age=max_evidence_age,
+            max_future_skew=max_future_skew,
+            errors=errors,
+        )
 
     artifacts: dict[str, Mapping[str, Any]] = {}
     payloads: dict[str, Mapping[str, Any]] = {}
@@ -324,6 +431,14 @@ def _validate_artifacts(
             errors.append(f"{label}.sha256: must be 64 lowercase hex characters")
         if not _valid_timestamp(item.get("captured_at")):
             errors.append(f"{label}.captured_at: must be offset-aware RFC3339")
+        _validate_timestamp_freshness(
+            item.get("captured_at"),
+            where=f"{label}.captured_at",
+            reference_time=evidence_reference_time,
+            max_age=max_evidence_age,
+            max_future_skew=max_future_skew,
+            errors=errors,
+        )
 
         if artifact_root is None:
             errors.append(f"{label}: artifact_root is required for file/hash read-back")
@@ -614,6 +729,9 @@ def _validate_readback(
     artifacts: Mapping[str, Mapping[str, Any]],
     artifact_payloads: Mapping[str, Mapping[str, Any]],
     artifact_root: Path | None,
+    evidence_reference_time: datetime | None,
+    max_evidence_age: timedelta | None,
+    max_future_skew: timedelta,
     client_by_id: Mapping[str, Mapping[str, Any]],
     errors: list[str],
 ) -> bool:
@@ -690,6 +808,9 @@ def _validate_readback(
                 reader_evidence,
                 client_label=f"reader({reader!r})",
                 artifact_root=artifact_root,
+                evidence_reference_time=evidence_reference_time,
+                max_evidence_age=max_evidence_age,
+                max_future_skew=max_future_skew,
                 errors=errors,
             )
         reader_call_ids = {
@@ -765,6 +886,9 @@ def validate_matrix_document(
     document: Any,
     *,
     artifact_root: str | Path | None,
+    evidence_reference_time: datetime | None = None,
+    max_evidence_age: timedelta | None = None,
+    max_future_skew: timedelta = GATE_MAX_FUTURE_SKEW,
 ) -> MatrixValidationReport:
     """Validate one parsed matrix and read back every referenced artifact.
 
@@ -774,6 +898,11 @@ def validate_matrix_document(
     """
 
     errors: list[str] = []
+    if evidence_reference_time is not None and (
+        evidence_reference_time.tzinfo is None or evidence_reference_time.utcoffset() is None
+    ):
+        errors.append("matrix: evidence_reference_time must be offset-aware")
+        evidence_reference_time = None
     root = _mapping(document)
     if root is None:
         return MatrixValidationReport(("matrix: root must be an object",), (), ())
@@ -790,13 +919,7 @@ def validate_matrix_document(
     else:
         _unknown_fields(authority, _AUTHORITY_FIELDS, "matrix.authority", errors)
         authority_hash = authority.get("endpoint_identity_sha256")
-        mode = authority.get("deployment_mode")
-        if mode == "not_configured":
-            for field in ("endpoint", "endpoint_identity_sha256", "server_version"):
-                if authority.get(field) is not None:
-                    errors.append(f"matrix.authority.{field}: must be null when not_configured")
-        elif not _is_hash(authority_hash):
-            errors.append("matrix.authority.endpoint_identity_sha256: configured authority requires SHA-256")
+        _validate_configured_authority(authority, errors)
 
     contract = _mapping(root.get("evidence_contract"))
     required_client_ids: list[str] = []
@@ -883,6 +1006,9 @@ def validate_matrix_document(
                 evidence,
                 client_label=label,
                 artifact_root=artifact_root_path,
+                evidence_reference_time=evidence_reference_time,
+                max_evidence_age=max_evidence_age,
+                max_future_skew=max_future_skew,
                 errors=errors,
             )
 
@@ -910,6 +1036,9 @@ def validate_matrix_document(
             artifacts=artifacts,
             artifact_payloads=artifact_payloads,
             artifact_root=artifact_root_path,
+            evidence_reference_time=evidence_reference_time,
+            max_evidence_age=max_evidence_age,
+            max_future_skew=max_future_skew,
             client_by_id=client_by_id,
             errors=errors,
         )
@@ -927,6 +1056,9 @@ def validate_matrix_file(
     path: str | Path,
     *,
     artifact_root: str | Path | None = None,
+    evidence_reference_time: datetime | None = None,
+    max_evidence_age: timedelta | None = None,
+    max_future_skew: timedelta = GATE_MAX_FUTURE_SKEW,
 ) -> MatrixValidationReport:
     """Load and validate a matrix; malformed JSON becomes a normal error."""
 
@@ -938,6 +1070,9 @@ def validate_matrix_file(
     return validate_matrix_document(
         document,
         artifact_root=artifact_root if artifact_root is not None else matrix_path.parent,
+        evidence_reference_time=evidence_reference_time,
+        max_evidence_age=max_evidence_age,
+        max_future_skew=max_future_skew,
     )
 
 
@@ -997,13 +1132,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 64
-    report = validate_matrix_file(args.matrix, artifact_root=args.artifact_root)
-
     required_passed = set(args.require_passed_client)
     required_read_back = set(args.require_external_read_back_client)
+    gate_requested = bool(required_passed or required_read_back)
+    report = validate_matrix_file(
+        args.matrix,
+        artifact_root=args.artifact_root,
+        evidence_reference_time=_utc_now() if gate_requested else None,
+        max_evidence_age=GATE_MAX_EVIDENCE_AGE if gate_requested else None,
+    )
+
     missing_passed = sorted(required_passed - set(report.passed_client_ids))
     missing_read_back = sorted(required_read_back - set(report.external_read_back_client_ids))
-    gate_requested = bool(required_passed or required_read_back)
 
     payload: dict[str, Any] = {
         "ok": report.ok,

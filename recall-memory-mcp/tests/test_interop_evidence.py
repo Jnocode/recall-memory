@@ -10,15 +10,18 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+import recall_memory_mcp.interop_evidence as interop_evidence
 from recall_memory_mcp.interop_evidence import main, validate_matrix_document
 
 
 AUTHORITY_HASH = "a" * 64
 SESSION_FINGERPRINT = "b" * 64
+CAPTURED_AT = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 MVP_TOOLS = [
     "memory_search",
     "memory_get",
@@ -35,7 +38,7 @@ def _artifact(root: Path, artifact_id: str, kind: str, body: dict[str, object]) 
     payload = {
         "schema_version": "1.0.0",
         "kind": kind,
-        "captured_at": "2026-08-24T05:00:00+00:00",
+        "captured_at": CAPTURED_AT,
         **body,
     }
     text = json.dumps(payload, sort_keys=True) + "\n"
@@ -45,7 +48,7 @@ def _artifact(root: Path, artifact_id: str, kind: str, body: dict[str, object]) 
         "kind": kind,
         "path": path.name,
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        "captured_at": "2026-08-24T05:00:00+00:00",
+        "captured_at": CAPTURED_AT,
     }
 
 
@@ -88,7 +91,7 @@ def _matrix(client: dict[str, object] | None = None) -> dict[str, object]:
     client = client or _not_run_client()
     return {
         "schema_version": "1.1.0",
-        "generated_at": "2026-08-24T05:00:00+00:00",
+        "generated_at": CAPTURED_AT,
         "authority": {
             "endpoint": None,
             "endpoint_identity_sha256": None,
@@ -187,14 +190,14 @@ def _passed_matrix(root: Path, client_id: str = "kiro", prefix: str = "") -> dic
                 {
                     "tool": "memory_status",
                     "outcome": "passed",
-                    "captured_at": "2026-08-24T05:00:00+00:00",
+                    "captured_at": CAPTURED_AT,
                     "authority_endpoint_identity_sha256": AUTHORITY_HASH,
                     "session_fingerprint_sha256": SESSION_FINGERPRINT,
                     "artifact_ids": [aid("call")],
                 }
             ],
             "evidence": {
-                "captured_at": "2026-08-24T05:00:00+00:00",
+                "captured_at": CAPTURED_AT,
                 "artifacts": artifacts,
             },
         }
@@ -297,6 +300,60 @@ def test_complete_real_host_shape_is_structurally_valid(tmp_path):
     report = validate_matrix_document(_passed_matrix(tmp_path), artifact_root=tmp_path)
     assert report.ok is True, report.errors
     assert report.passed_client_ids == ("kiro",)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_fragment"),
+    [
+        ("deployment_mode", "invented", "deployment_mode"),
+        ("endpoint", None, "configured authority requires an endpoint"),
+        ("server_version", None, "configured authority requires an observed server version"),
+        ("endpoint", "http://recall.invalid/mcp", "requires an HTTPS endpoint"),
+        ("endpoint", "https://recall.invalid/mcp?token=unsafe", "must not contain query"),
+        ("endpoint", "https://recall.invalid/mcp?", "must not contain query"),
+        ("endpoint", "https://recall.invalid/mcp#", "must not contain a fragment"),
+        ("endpoint", "https://recall.invalid/mcp\n", "control characters"),
+    ],
+)
+def test_configured_authority_requires_known_mode_and_safe_observed_endpoint(
+    tmp_path, field, value, error_fragment
+):
+    document = _passed_matrix(tmp_path)
+    document["authority"][field] = value
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert any(error_fragment in error for error in report.errors)
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+
+
+def test_local_authority_allows_only_loopback_mcp_endpoint(tmp_path):
+    document = _passed_matrix(tmp_path)
+    document["authority"].update(
+        {
+            "deployment_mode": "local",
+            "endpoint": "http://localhost:8765/mcp",
+        }
+    )
+    assert validate_matrix_document(document, artifact_root=tmp_path).ok is True
+
+    document["authority"]["endpoint"] = "http://192.0.2.10:8765/mcp"
+    errors = _errors(document, tmp_path)
+    assert any("loopback" in error for error in errors)
+
+
+def test_naive_freshness_reference_time_fails_closed_without_raising(tmp_path):
+    report = validate_matrix_document(
+        _passed_matrix(tmp_path),
+        artifact_root=tmp_path,
+        evidence_reference_time=datetime.now(),
+        max_evidence_age=timedelta(hours=24),
+    )
+
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+    assert any("evidence_reference_time must be offset-aware" in error for error in report.errors)
 
 
 @pytest.mark.parametrize("placeholder", [None, "", "unknown", "N/A", "latest", "TBD"])
@@ -514,7 +571,8 @@ def test_pass_binds_matrix_call_timestamp_to_typed_trace(tmp_path):
 
 def test_call_timestamp_binding_accepts_same_instant_with_different_offset(tmp_path):
     document = _passed_matrix(tmp_path)
-    document["clients"][0]["calls"][0]["captured_at"] = "2026-08-24T13:00:00+08:00"
+    same_instant = datetime.fromisoformat(CAPTURED_AT).astimezone(timezone(timedelta(hours=8)))
+    document["clients"][0]["calls"][0]["captured_at"] = same_instant.isoformat()
 
     report = validate_matrix_document(document, artifact_root=tmp_path)
 
@@ -705,6 +763,59 @@ def test_cli_gate_requirement_accepts_only_observed_passed_client(tmp_path, caps
     output = json.loads(capsys.readouterr().out)
     assert output["requirements_met"] is False
     assert output["missing_passed_client_ids"] == ["chatgpt_desktop"]
+
+
+def test_cli_gate_requirement_rejects_evidence_older_than_24_hours(tmp_path, capsys, monkeypatch):
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text(json.dumps(_passed_matrix(tmp_path)), encoding="utf-8")
+    captured_at = datetime.fromisoformat(CAPTURED_AT)
+    monkeypatch.setattr(
+        interop_evidence,
+        "_utc_now",
+        lambda: captured_at + timedelta(hours=24, seconds=1),
+    )
+
+    assert main(
+        [
+            str(matrix),
+            "--artifact-root",
+            str(tmp_path),
+            "--require-passed-client",
+            "kiro",
+        ]
+    ) == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is False
+    assert output["requirements_met"] is False
+    assert output["passed_client_ids"] == []
+    assert any("older than the 24-hour gate window" in error for error in output["errors"])
+
+
+def test_cli_gate_requirement_rejects_evidence_over_five_minutes_in_future(
+    tmp_path, capsys, monkeypatch
+):
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text(json.dumps(_passed_matrix(tmp_path)), encoding="utf-8")
+    captured_at = datetime.fromisoformat(CAPTURED_AT)
+    monkeypatch.setattr(
+        interop_evidence,
+        "_utc_now",
+        lambda: captured_at - timedelta(minutes=5, seconds=1),
+    )
+
+    assert main(
+        [
+            str(matrix),
+            "--artifact-root",
+            str(tmp_path),
+            "--require-passed-client",
+            "kiro",
+        ]
+    ) == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is False
+    assert output["passed_client_ids"] == []
+    assert any("more than 5 minutes in the future" in error for error in output["errors"])
 
 
 def test_cli_external_read_back_requirement_is_separate_from_client_pass(tmp_path, capsys):
