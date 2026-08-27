@@ -19,7 +19,8 @@ import recall_memory_mcp.interop_evidence as interop_evidence
 from recall_memory_mcp.interop_evidence import main, validate_matrix_document
 
 
-AUTHORITY_HASH = "a" * 64
+AUTHORITY_ENDPOINT = "https://recall.invalid/mcp"
+AUTHORITY_HASH = hashlib.sha256(AUTHORITY_ENDPOINT.encode("utf-8")).hexdigest()
 SESSION_FINGERPRINT = "b" * 64
 CAPTURED_AT = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 MVP_TOOLS = [
@@ -90,13 +91,16 @@ def _not_run_client(client_id: str = "kiro") -> dict[str, object]:
 def _matrix(client: dict[str, object] | None = None) -> dict[str, object]:
     client = client or _not_run_client()
     return {
-        "schema_version": "1.1.0",
+        "schema_version": "1.2.0",
         "generated_at": CAPTURED_AT,
         "authority": {
             "endpoint": None,
             "endpoint_identity_sha256": None,
             "deployment_mode": "not_configured",
             "server_version": None,
+            "control_plane_poll_observed": None,
+            "workspace_association_observed": None,
+            "evidence": {"captured_at": None, "artifacts": []},
         },
         "evidence_contract": {
             "allowed_status": ["not_run", "blocked", "failed", "passed"],
@@ -204,10 +208,13 @@ def _passed_matrix(root: Path, client_id: str = "kiro", prefix: str = "") -> dic
     )
     matrix = _matrix(client)
     matrix["authority"] = {
-        "endpoint": "https://recall.invalid/mcp",
+        "endpoint": AUTHORITY_ENDPOINT,
         "endpoint_identity_sha256": AUTHORITY_HASH,
-        "deployment_mode": "tunnel_dev",
+        "deployment_mode": "remote",
         "server_version": "0.1.0",
+        "control_plane_poll_observed": None,
+        "workspace_association_observed": None,
+        "evidence": {"captured_at": None, "artifacts": []},
     }
     return matrix
 
@@ -329,18 +336,120 @@ def test_configured_authority_requires_known_mode_and_safe_observed_endpoint(
 
 
 def test_local_authority_allows_only_loopback_mcp_endpoint(tmp_path):
-    document = _passed_matrix(tmp_path)
+    document = _matrix()
+    local_endpoint = "http://localhost:8765/mcp"
     document["authority"].update(
         {
             "deployment_mode": "local",
-            "endpoint": "http://localhost:8765/mcp",
+            "endpoint": local_endpoint,
+            "endpoint_identity_sha256": hashlib.sha256(local_endpoint.encode("utf-8")).hexdigest(),
+            "server_version": "0.1.0",
         }
     )
     assert validate_matrix_document(document, artifact_root=tmp_path).ok is True
 
-    document["authority"]["endpoint"] = "http://192.0.2.10:8765/mcp"
+    non_loopback_endpoint = "http://192.0.2.10:8765/mcp"
+    document["authority"]["endpoint"] = non_loopback_endpoint
+    document["authority"]["endpoint_identity_sha256"] = hashlib.sha256(
+        non_loopback_endpoint.encode("utf-8")
+    ).hexdigest()
     errors = _errors(document, tmp_path)
     assert any("loopback" in error for error in errors)
+
+
+def _rewrite_authority_artifact(document, root: Path, artifact_id: str, **changes) -> None:
+    entries = document["authority"]["evidence"]["artifacts"]
+    entry = next(item for item in entries if item["artifact_id"] == artifact_id)
+    path = root / entry["path"]
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(changes)
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    entry["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if "captured_at" in changes:
+        entry["captured_at"] = changes["captured_at"]
+
+
+def _attach_tunnel_control_plane_evidence(document, root: Path) -> None:
+    trace = _artifact(
+        root,
+        "tunnel-control-plane",
+        "tunnel_control_plane_trace",
+        {
+            "authority_endpoint_identity_sha256": AUTHORITY_HASH,
+            "deployment_mode": "tunnel_dev",
+            "tunnel_client_version": "0.0.12",
+            "control_plane_poll_ok": True,
+            "workspace_association_observed": True,
+            "result": "passed",
+        },
+    )
+    document["authority"].update(
+        {
+            "control_plane_poll_observed": True,
+            "workspace_association_observed": True,
+            "evidence": {"captured_at": CAPTURED_AT, "artifacts": [trace]},
+        }
+    )
+
+
+def test_tunnel_dev_requires_control_plane_and_workspace_association_evidence(tmp_path):
+    document = _passed_matrix(tmp_path)
+    document["authority"]["deployment_mode"] = "tunnel_dev"
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+    assert any("control-plane poll" in error for error in report.errors)
+    assert any("workspace association" in error for error in report.errors)
+
+
+def test_tunnel_dev_accepts_bound_typed_control_plane_evidence(tmp_path):
+    document = _passed_matrix(tmp_path)
+    document["authority"]["deployment_mode"] = "tunnel_dev"
+    _attach_tunnel_control_plane_evidence(document, tmp_path)
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert report.ok is True, report.errors
+    assert report.passed_client_ids == ("kiro",)
+
+
+def test_endpoint_identity_hash_cannot_be_replayed_for_another_endpoint(tmp_path):
+    document = _passed_matrix(tmp_path)
+    document["authority"]["deployment_mode"] = "tunnel_dev"
+    _attach_tunnel_control_plane_evidence(document, tmp_path)
+    document["authority"]["endpoint"] = "https://unrelated-authority.invalid/mcp"
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+    assert any("endpoint identity SHA-256 does not match endpoint" in error for error in report.errors)
+
+
+@pytest.mark.parametrize(
+    ("change", "error_fragment"),
+    [
+        ({"control_plane_poll_ok": False}, "control-plane poll"),
+        ({"workspace_association_observed": False}, "workspace association"),
+        ({"authority_endpoint_identity_sha256": "e" * 64}, "authority identity"),
+        ({"result": "failed"}, "result"),
+    ],
+)
+def test_tunnel_dev_rejects_unproven_or_unbound_control_plane_trace(
+    tmp_path, change, error_fragment
+):
+    document = _passed_matrix(tmp_path)
+    document["authority"]["deployment_mode"] = "tunnel_dev"
+    _attach_tunnel_control_plane_evidence(document, tmp_path)
+    _rewrite_authority_artifact(document, tmp_path, "tunnel-control-plane", **change)
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+    assert any(error_fragment in error for error in report.errors)
 
 
 def test_naive_freshness_reference_time_fails_closed_without_raising(tmp_path):

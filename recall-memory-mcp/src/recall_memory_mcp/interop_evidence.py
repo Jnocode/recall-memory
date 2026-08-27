@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 
 from .redaction import redact_text
 
-SCHEMA_VERSION: Final[str] = "1.1.0"
+SCHEMA_VERSION: Final[str] = "1.2.0"
 ALLOWED_STATUS: Final[frozenset[str]] = frozenset({"not_run", "blocked", "failed", "passed"})
 ALLOWED_DEPLOYMENT_MODES: Final[frozenset[str]] = frozenset(
     {"not_configured", "local", "tunnel_dev", "remote"}
@@ -45,7 +45,15 @@ _PLACEHOLDERS = frozenset({"", "unknown", "n/a", "na", "latest", "tbd", "todo", 
 
 _ROOT_FIELDS = frozenset({"schema_version", "generated_at", "authority", "evidence_contract", "clients"})
 _AUTHORITY_FIELDS = frozenset(
-    {"endpoint", "endpoint_identity_sha256", "deployment_mode", "server_version"}
+    {
+        "endpoint",
+        "endpoint_identity_sha256",
+        "deployment_mode",
+        "server_version",
+        "control_plane_poll_observed",
+        "workspace_association_observed",
+        "evidence",
+    }
 )
 _CONTRACT_FIELDS = frozenset(
     {"allowed_status", "unknown_values_must_be_null", "secrets_forbidden", "required_client_ids"}
@@ -179,6 +187,17 @@ _TRACE_FIELDS: Final[dict[str, frozenset[str]]] = {
             "outcome",
         }
     ),
+    "tunnel_control_plane_trace": _TRACE_COMMON_FIELDS
+    | frozenset(
+        {
+            "authority_endpoint_identity_sha256",
+            "deployment_mode",
+            "tunnel_client_version",
+            "control_plane_poll_ok",
+            "workspace_association_observed",
+            "result",
+        }
+    ),
     "blocked_trace": _TRACE_COMMON_FIELDS | frozenset({"client_id", "code", "stage"}),
     "failure_trace": _TRACE_COMMON_FIELDS | frozenset({"client_id", "code", "stage"}),
 }
@@ -270,6 +289,12 @@ def _is_hash(value: Any) -> bool:
     return isinstance(value, str) and _HASH_RE.fullmatch(value) is not None
 
 
+def _endpoint_identity_sha256(endpoint: str) -> str:
+    """Return the schema 1.2 authority identity: SHA-256 of exact UTF-8 endpoint bytes."""
+
+    return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()
+
+
 def _is_observed_text(value: Any) -> bool:
     return isinstance(value, str) and value.strip().lower() not in _PLACEHOLDERS
 
@@ -353,10 +378,82 @@ def _validate_configured_authority(authority: Mapping[str, Any], errors: list[st
             elif not host:
                 errors.append("matrix.authority.endpoint: configured authority requires a hostname")
 
-    if not _is_hash(authority.get("endpoint_identity_sha256")):
+    declared_identity = authority.get("endpoint_identity_sha256")
+    if not _is_hash(declared_identity):
         errors.append("matrix.authority.endpoint_identity_sha256: configured authority requires SHA-256")
+    elif isinstance(endpoint, str) and declared_identity != _endpoint_identity_sha256(endpoint):
+        errors.append("matrix.authority.endpoint_identity_sha256: endpoint identity SHA-256 does not match endpoint")
     if not _is_observed_text(authority.get("server_version")):
         errors.append("matrix.authority.server_version: configured authority requires an observed server version")
+
+
+def _validate_authority_evidence(
+    authority: Mapping[str, Any],
+    *,
+    artifact_root: Path | None,
+    evidence_reference_time: datetime | None,
+    max_evidence_age: timedelta | None,
+    max_future_skew: timedelta,
+    errors: list[str],
+) -> None:
+    """Require typed control-plane proof for Secure MCP Tunnel authorities."""
+
+    evidence = _mapping(authority.get("evidence"))
+    if evidence is None:
+        errors.append("matrix.authority.evidence: must be an object")
+        artifacts: dict[str, Mapping[str, Any]] = {}
+        payloads: dict[str, Mapping[str, Any]] = {}
+    else:
+        artifacts, payloads = _validate_artifacts(
+            evidence,
+            client_label="matrix.authority",
+            artifact_root=artifact_root,
+            evidence_reference_time=evidence_reference_time,
+            max_evidence_age=max_evidence_age,
+            max_future_skew=max_future_skew,
+            errors=errors,
+        )
+
+    mode = authority.get("deployment_mode")
+    if mode != "tunnel_dev":
+        if authority.get("control_plane_poll_observed") is not None:
+            errors.append("matrix.authority.control_plane_poll_observed: must be null outside tunnel_dev")
+        if authority.get("workspace_association_observed") is not None:
+            errors.append("matrix.authority.workspace_association_observed: must be null outside tunnel_dev")
+        if evidence is not None and (
+            evidence.get("captured_at") is not None or evidence.get("artifacts") != []
+        ):
+            errors.append("matrix.authority.evidence: must be null/empty outside tunnel_dev")
+        return
+
+    if authority.get("control_plane_poll_observed") is not True:
+        errors.append("matrix.authority: tunnel_dev requires a successful control-plane poll")
+    if authority.get("workspace_association_observed") is not True:
+        errors.append("matrix.authority: tunnel_dev requires observed workspace association")
+
+    traces = [
+        payload
+        for artifact_id, payload in payloads.items()
+        if artifacts.get(artifact_id, {}).get("kind") == "tunnel_control_plane_trace"
+    ]
+    if not traces:
+        errors.append("matrix.authority.evidence: tunnel_dev requires tunnel_control_plane_trace artifact")
+        return
+
+    authority_hash = authority.get("endpoint_identity_sha256")
+    for trace in traces:
+        if trace.get("authority_endpoint_identity_sha256") != authority_hash:
+            errors.append("matrix.authority.evidence: tunnel trace authority identity mismatch")
+        if trace.get("deployment_mode") != "tunnel_dev":
+            errors.append("matrix.authority.evidence: tunnel trace deployment mode mismatch")
+        if not _is_observed_text(trace.get("tunnel_client_version")):
+            errors.append("matrix.authority.evidence: tunnel trace requires observed tunnel client version")
+        if trace.get("control_plane_poll_ok") is not True:
+            errors.append("matrix.authority.evidence: tunnel trace does not prove control-plane poll")
+        if trace.get("workspace_association_observed") is not True:
+            errors.append("matrix.authority.evidence: tunnel trace does not prove workspace association")
+        if trace.get("result") != "passed":
+            errors.append("matrix.authority.evidence: tunnel trace result must be passed")
 
 
 def _safe_artifact_path(root: Path, raw_path: Any) -> tuple[Path | None, str | None]:
@@ -912,6 +1009,7 @@ def validate_matrix_document(
     if not _valid_timestamp(root.get("generated_at")):
         errors.append("matrix.generated_at: must be offset-aware RFC3339")
 
+    artifact_root_path = Path(artifact_root) if artifact_root is not None else None
     authority = _mapping(root.get("authority"))
     authority_hash: Any = None
     if authority is None:
@@ -920,6 +1018,14 @@ def validate_matrix_document(
         _unknown_fields(authority, _AUTHORITY_FIELDS, "matrix.authority", errors)
         authority_hash = authority.get("endpoint_identity_sha256")
         _validate_configured_authority(authority, errors)
+        _validate_authority_evidence(
+            authority,
+            artifact_root=artifact_root_path,
+            evidence_reference_time=evidence_reference_time,
+            max_evidence_age=max_evidence_age,
+            max_future_skew=max_future_skew,
+            errors=errors,
+        )
 
     contract = _mapping(root.get("evidence_contract"))
     required_client_ids: list[str] = []
@@ -969,7 +1075,6 @@ def validate_matrix_document(
 
     passed: list[str] = []
     read_back: list[str] = []
-    artifact_root_path = Path(artifact_root) if artifact_root is not None else None
     for index, client in enumerate(clients):
         client_id = client.get("client_id")
         label = f"matrix.clients[{index}]({client_id!r})"
