@@ -217,14 +217,20 @@ def _unknown_fields(value: Mapping[str, Any], allowed: frozenset[str], where: st
         errors.append(f"{where}: missing fields: {', '.join(missing)}")
 
 
-def _valid_timestamp(value: Any) -> bool:
+def _parse_timestamp(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value:
-        return False
+        return None
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        return False
-    return parsed.tzinfo is not None and parsed.utcoffset() is not None
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
+
+
+def _valid_timestamp(value: Any) -> bool:
+    return _parse_timestamp(value) is not None
 
 
 def _is_hash(value: Any) -> bool:
@@ -588,6 +594,10 @@ def _validate_passed(
                 errors.append(f"{call_label}: tool call trace session does not match lifecycle")
             if payload.get("tool") != call.get("tool") or payload.get("outcome") != call.get("outcome"):
                 errors.append(f"{call_label}: tool call trace outcome does not match matrix")
+            call_time = _parse_timestamp(call.get("captured_at"))
+            trace_time = _parse_timestamp(payload.get("captured_at"))
+            if call_time is not None and trace_time is not None and trace_time != call_time:
+                errors.append(f"{call_label}: tool call trace captured_at does not match matrix")
             if not _is_observed_text(payload.get("request_id")):
                 errors.append(f"{call_label}: tool call trace requires an observed request_id")
             if payload.get("scope") != required_scope:
@@ -617,6 +627,10 @@ def _validate_readback(
         errors.append(f"{label}.external_read_back.status: invalid status")
         return False
     if status != "passed":
+        return False
+
+    if client.get("status") != "passed":
+        errors.append(f"{label}.external_read_back: writer client itself is not passed")
         return False
 
     writer = client.get("client_id")
@@ -736,6 +750,14 @@ def _validate_readback(
             or reader_call.get("content_sha256") != readback.get("content_sha256")
         ):
             errors.append(f"{label}.external_read_back: reader call trace does not prove the same memory")
+
+        writer_time = _parse_timestamp(writer_call.get("captured_at")) if writer_call is not None else None
+        reader_time = _parse_timestamp(reader_call.get("captured_at")) if reader_call is not None else None
+        readback_time = _parse_timestamp(trace.get("captured_at"))
+        if writer_time is not None and reader_time is not None and reader_time < writer_time:
+            errors.append(f"{label}.external_read_back: reader call predates writer call")
+        if reader_time is not None and readback_time is not None and readback_time < reader_time:
+            errors.append(f"{label}.external_read_back: read-back trace predates reader call")
     return True
 
 

@@ -221,6 +221,8 @@ def _rewrite_artifact(document, root: Path, artifact_id: str, client_index: int 
     payload.update(changes)
     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
     entry["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if "captured_at" in changes:
+        entry["captured_at"] = changes["captured_at"]
 
 
 def _valid_external_readback_matrix(root: Path) -> dict[str, object]:
@@ -487,6 +489,87 @@ def test_external_read_back_binds_writer_and_reader_call_traces(tmp_path):
     assert report.external_read_back_client_ids == ("kiro",)
 
 
+@pytest.mark.parametrize("writer_status", ["blocked", "failed"])
+def test_external_read_back_requires_writer_client_to_be_passed(tmp_path, writer_status):
+    document = _valid_external_readback_matrix(tmp_path)
+    document["clients"][0]["status"] = writer_status
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert any("writer client itself is not passed" in error for error in report.errors)
+    assert report.ok is False
+    assert report.external_read_back_client_ids == ()
+
+
+def test_pass_binds_matrix_call_timestamp_to_typed_trace(tmp_path):
+    document = _passed_matrix(tmp_path)
+    document["clients"][0]["calls"][0]["captured_at"] = "2026-08-24T06:00:00+00:00"
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert any("captured_at does not match matrix" in error for error in report.errors)
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+
+
+def test_call_timestamp_binding_accepts_same_instant_with_different_offset(tmp_path):
+    document = _passed_matrix(tmp_path)
+    document["clients"][0]["calls"][0]["captured_at"] = "2026-08-24T13:00:00+08:00"
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert report.ok is True, report.errors
+    assert report.passed_client_ids == ("kiro",)
+
+
+def test_external_read_back_rejects_reader_call_before_writer_call(tmp_path):
+    document = _valid_external_readback_matrix(tmp_path)
+    writer, reader = document["clients"]
+    writer["calls"][0]["captured_at"] = "2026-08-24T06:00:00+00:00"
+    reader["calls"][0]["captured_at"] = "2026-08-24T04:00:00+00:00"
+    _rewrite_artifact(
+        document,
+        tmp_path,
+        "writer-call",
+        captured_at="2026-08-24T06:00:00+00:00",
+    )
+    _rewrite_artifact(
+        document,
+        tmp_path,
+        "reader-call",
+        client_index=1,
+        captured_at="2026-08-24T04:00:00+00:00",
+    )
+    _rewrite_artifact(
+        document,
+        tmp_path,
+        "external-readback",
+        captured_at="2026-08-24T07:00:00+00:00",
+    )
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert any("reader call predates writer call" in error for error in report.errors)
+    assert report.ok is False
+    assert report.external_read_back_client_ids == ()
+
+
+def test_external_read_back_trace_cannot_predate_reader_call(tmp_path):
+    document = _valid_external_readback_matrix(tmp_path)
+    _rewrite_artifact(
+        document,
+        tmp_path,
+        "external-readback",
+        captured_at="2026-08-24T04:00:00+00:00",
+    )
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert any("read-back trace predates reader call" in error for error in report.errors)
+    assert report.ok is False
+    assert report.external_read_back_client_ids == ()
+
+
 def test_external_read_back_payload_cannot_disagree_with_matrix(tmp_path):
     document = _valid_external_readback_matrix(tmp_path)
     _rewrite_artifact(document, tmp_path, "external-readback", content_sha256="e" * 64)
@@ -658,6 +741,30 @@ def test_cli_external_read_back_requirement_is_separate_from_client_pass(tmp_pat
     assert output["requirements_met"] is False
     assert output["missing_passed_client_ids"] == []
     assert output["missing_external_read_back_client_ids"] == ["claude_desktop"]
+
+
+def test_cli_gate_rejects_external_read_back_from_non_passed_writer(tmp_path, capsys):
+    document = _valid_external_readback_matrix(tmp_path)
+    document["clients"][0]["status"] = "blocked"
+    matrix = tmp_path / "matrix.json"
+    matrix.write_text(json.dumps(document), encoding="utf-8")
+
+    assert main(
+        [
+            str(matrix),
+            "--artifact-root",
+            str(tmp_path),
+            "--require-passed-client",
+            "claude_desktop",
+            "--require-external-read-back-client",
+            "kiro",
+        ]
+    ) == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["ok"] is False
+    assert output["requirements_met"] is False
+    assert output["external_read_back_client_ids"] == []
+    assert output["missing_external_read_back_client_ids"] == ["kiro"]
 
 
 @pytest.mark.parametrize(
