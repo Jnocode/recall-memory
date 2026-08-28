@@ -338,6 +338,43 @@ def test_complete_real_host_shape_is_structurally_valid(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "invalid_client_class",
+    [None, True, [], {}, "unknown", "invented_host"],
+    ids=["null", "boolean", "list", "object", "placeholder", "unsupported"],
+)
+def test_client_class_is_a_closed_typed_enum_even_when_identity_trace_agrees(
+    tmp_path, invalid_client_class
+):
+    document = _passed_matrix(tmp_path)
+    document["clients"][0]["client_class"] = invalid_client_class
+    _rewrite_artifact(document, tmp_path, "identity", client_class=invalid_client_class)
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+    assert any("client_class" in error for error in report.errors)
+
+
+@pytest.mark.parametrize(
+    "invalid_scope",
+    [None, True, [], {}, "unknown"],
+    ids=["null", "boolean", "list", "object", "placeholder"],
+)
+def test_declared_required_scope_must_be_safe_observed_text_before_host_run(
+    tmp_path, invalid_scope
+):
+    document = _matrix()
+    document["clients"][0]["scope_mapping"]["required_exact_scope"] = invalid_scope
+
+    report = validate_matrix_document(document, artifact_root=tmp_path)
+
+    assert report.ok is False
+    assert report.passed_client_ids == ()
+    assert any("required_exact_scope" in error for error in report.errors)
+
+
+@pytest.mark.parametrize(
     ("field", "value", "error_fragment"),
     [
         ("deployment_mode", "invented", "deployment_mode"),

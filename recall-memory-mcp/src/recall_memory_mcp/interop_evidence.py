@@ -27,6 +27,9 @@ ALLOWED_STATUS: Final[frozenset[str]] = frozenset({"not_run", "blocked", "failed
 ALLOWED_DEPLOYMENT_MODES: Final[frozenset[str]] = frozenset(
     {"not_configured", "local", "tunnel_dev", "remote"}
 )
+ALLOWED_CLIENT_CLASSES: Final[frozenset[str]] = frozenset(
+    {"desktop_host", "ide_host", "ide_agent"}
+)
 GATE_MAX_EVIDENCE_AGE: Final[timedelta] = timedelta(hours=24)
 GATE_MAX_FUTURE_SKEW: Final[timedelta] = timedelta(minutes=5)
 MVP_TOOLS: Final[frozenset[str]] = frozenset(
@@ -1076,6 +1079,9 @@ def validate_matrix_document(
             errors.append(f"matrix.clients: duplicate client_id {client_id!r}")
         else:
             client_by_id[client_id] = client
+        client_class = client.get("client_class")
+        if not isinstance(client_class, str) or client_class not in ALLOWED_CLIENT_CLASSES:
+            errors.append(f"{label}.client_class: unsupported client class")
 
     missing_clients = sorted(set(required_client_ids) - set(client_by_id))
     if missing_clients:
@@ -1098,6 +1104,11 @@ def validate_matrix_document(
                 errors.append(f"{label}.scope_mapping: must be null or an object")
             else:
                 _unknown_fields(scope_mapping, _SCOPE_FIELDS, f"{label}.scope_mapping", errors)
+                if not _is_observed_text(scope_mapping.get("required_exact_scope")):
+                    errors.append(
+                        f"{label}.scope_mapping.required_exact_scope: "
+                        "must be safe non-placeholder text"
+                    )
 
         lifecycle = _mapping(client.get("session_lifecycle"))
         if lifecycle is None:
@@ -1282,6 +1293,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 __all__ = [
+    "ALLOWED_CLIENT_CLASSES",
     "ALLOWED_STATUS",
     "MVP_TOOLS",
     "SCHEMA_VERSION",
