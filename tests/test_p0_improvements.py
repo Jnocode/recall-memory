@@ -8,6 +8,9 @@ import tempfile
 
 import pytest
 
+pytest.importorskip("fastapi", reason="tests/test_p0_improvements.py requires unreleased recall-server prototype and fastapi")
+pytest.importorskip("recall_server", reason="tests/test_p0_improvements.py requires unreleased recall-server prototype")
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from recall.store import Memory, SQLiteStore
