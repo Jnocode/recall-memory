@@ -84,7 +84,9 @@ def main(argv: list[str]) -> int:
         _fail(f"cwd {cwd} is inside the checkout {checkout}; run from outside it")
 
     venv_marker = "ci-venv"
-    if venv_marker not in pathlib.Path(sys.executable).resolve().parts:
+    resolved_parts = pathlib.Path(sys.executable).resolve().parts
+    raw_parts = pathlib.Path(sys.executable).parts
+    if venv_marker not in resolved_parts and venv_marker not in raw_parts:
         _fail(f"interpreter {sys.executable} is not the fresh {venv_marker}")
 
     _check_package("recall", checkout / "src" / "recall", venv_marker)

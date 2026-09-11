@@ -156,10 +156,11 @@ jobs:
             VENV_PY="$GITHUB_WORKSPACE/ci-venv/bin/python"
           fi
           "$VENV_PY" -m pip install pytest
-          rm -rf "$RUNNER_TEMP/sdist-check"
-          mkdir -p "$RUNNER_TEMP/sdist-check"
-          tar -xzf ci-dist/mcp/*.tar.gz -C "$RUNNER_TEMP/sdist-check"
-          cd "$RUNNER_TEMP/sdist-check"/recall_memory_mcp-*/
+          TARGET_DIR=$(python -c "import os, pathlib; print(pathlib.Path(os.environ['RUNNER_TEMP']).as_posix() + '/sdist-check')")
+          rm -rf "$TARGET_DIR"
+          mkdir -p "$TARGET_DIR"
+          tar -xzf ci-dist/mcp/*.tar.gz -C "$TARGET_DIR"
+          cd "$TARGET_DIR"/recall_memory_mcp-*/
           test ! -d .git
           test ! -d .kiro
           test -f tests/_support.py
