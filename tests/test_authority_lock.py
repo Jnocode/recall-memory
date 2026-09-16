@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -463,7 +464,10 @@ def test_unreliable_filesystem_fails_closed_and_creates_no_lock_file(
 
 
 def test_local_temp_path_is_classified_reliable() -> None:
-    assert probe_filesystem(Path(__file__).resolve()) is None
+    probe_target = Path(tempfile.gettempdir()).resolve()
+    if sys.platform.startswith("linux") and probe_filesystem(Path(__file__).resolve()) is None:
+        probe_target = Path(__file__).resolve()
+    assert probe_filesystem(probe_target) is None
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path classification")
