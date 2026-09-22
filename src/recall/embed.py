@@ -94,10 +94,15 @@ def embed_batch(texts: list[str]) -> list[list[float] | None]:
 
 
 def is_loaded() -> bool:
-    """Check if LM Studio is reachable."""
+    """Check if the embedding backend is reachable.
+
+    Probes the same base URL that ``embed`` actually talks to. Reading only
+    ``EMBED_PORT`` here would probe the default port even when
+    ``EMBED_BASE_URL`` points somewhere else, so the offline skip-in
+    (``skipif(not is_loaded())``) and the live calls could disagree.
+    """
     try:
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{EMBED_PORT}/v1/models")
+        req = urllib.request.Request(f"{EMBED_BASE_URL}/v1/models")
         urllib.request.urlopen(req, timeout=2)
         return True
     except Exception:

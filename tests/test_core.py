@@ -128,7 +128,9 @@ def test_expand_query_unknown_terms():
 
 # ─── Embedding ────────────────────────────────────────────────────────────────
 
-@pytest.mark.skipif(not is_loaded(), reason="LM Studio not running on port 1234")
+@pytest.mark.skipif(not is_loaded(),
+                    reason="embedding backend unreachable "
+                           "(LM Studio not running; set EMBED_BASE_URL/EMBED_PORT)")
 def test_embed():
     """Test embedding function returns expected dimension."""
     vec = embed("test query")

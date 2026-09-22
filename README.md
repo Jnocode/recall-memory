@@ -53,10 +53,13 @@ Expected response:
 
 ### Port configuration
 
-Default port is `1234`. To change it, set `EMBED_PORT` in `src/recall/embed.py`:
-```python
-EMBED_PORT = 1234  # change to match your LM Studio port
+Default port is `1234`. Override with environment variables instead of editing source:
+```bash
+export EMBED_PORT=1235                           # LM Studio on this host, other port
+export EMBED_BASE_URL=http://192.168.1.20:1234   # LM Studio on another host/container
 ```
+`EMBED_BASE_URL` wins over `EMBED_PORT`. Health checks and the offline test skip
+probe the same base URL that embeddings are actually sent to.
 
 ### If LM Studio is down
 

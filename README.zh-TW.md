@@ -43,10 +43,12 @@ recall. 使用 **nomic-embed-text-v1.5**（768 維）透過 LM Studio 運行。
 
 ### 連接埠設定
 
-預設連接埠為 `1234`。可在 `src/recall/embed.py` 中更改：
-```python
-EMBED_PORT = 1234  # 改為你的 LM Studio 連接埠
+預設連接埠為 `1234`。請改用環境變數覆蓋，不必修改原始碼：
+```bash
+export EMBED_PORT=1235                           # 本機 LM Studio，其他連接埠
+export EMBED_BASE_URL=http://192.168.1.20:1234   # 其他主機／容器上的 LM Studio
 ```
+`EMBED_BASE_URL` 優先於 `EMBED_PORT`。健康檢查與離線測試跳過判斷探測的，正是 embedding 實際送往的 base URL。
 
 ### 如果 LM Studio 離線
 
