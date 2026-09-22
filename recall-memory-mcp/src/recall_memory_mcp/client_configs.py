@@ -22,7 +22,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from .provisioning import harden_file
 
@@ -53,7 +53,7 @@ class RefusedWriteError(ClientConfigError):
 @dataclass(frozen=True)
 class ClientTemplate:
     client: str
-    format: str  # "json" | "markdown"
+    format: Literal["json", "markdown"]
     text: str
     writable: bool
     payload: dict[str, Any] | None = None
@@ -101,12 +101,13 @@ _USAGE_POLICY = (
 
 def _chatgpt_markdown(settings: Any) -> str:
     return (
-        "# Recall memory — ChatGPT Desktop\n\n"
-        "ChatGPT Desktop has no on-disk connector file: connectors are added in\n"
+        "# Recall memory — ChatGPT\n\n"
+        "ChatGPT has no on-disk connector file: connectors are added in\n"
         "the app. This command therefore prints instructions and refuses\n"
         "`--write`.\n\n"
-        "1. Enable developer mode in ChatGPT Desktop settings.\n"
-        "2. Add an MCP server / plugin pointing at:\n\n"
+        "1. Enable developer mode: Settings -> Security and login ->\n"
+        "   Developer mode.\n"
+        "2. Add an MCP server / plugin (https://chatgpt.com/plugins) pointing at:\n\n"
         f"       {server_url(settings)}\n\n"
         "3. Complete the OAuth authorization prompt. The token is held by the\n"
         f"   host; never paste it into a file. Local runs may use the "
