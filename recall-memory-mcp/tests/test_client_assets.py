@@ -355,6 +355,28 @@ def test_chatgpt_readme_matches_the_no_write_client_config_behaviour() -> None:
     assert "/mcp" in text
 
 
+def test_chatgpt_generated_guidance_matches_documented_host_facts() -> None:
+    """The CLI sheet and the copy-paste README must share the same host facts."""
+
+    generated = cc.render("chatgpt", _default_settings()).text
+    documented = _read(CHATGPT_README)
+    for fact in (
+        "no on-disk connector file",
+        cc.CHATGPT_DEVELOPER_MODE_PATH,
+        cc.CHATGPT_PLUGINS_URL,
+        "Secure MCP Tunnel",
+        cc.MCP_PATH,
+    ):
+        assert fact in generated, f"generated ChatGPT guidance omits {fact!r}"
+        if fact == cc.CHATGPT_DEVELOPER_MODE_PATH:
+            for menu_item in ("Settings", "Security and login", "Developer mode"):
+                assert menu_item in documented, (
+                    f"ChatGPT README omits developer-mode menu item {menu_item!r}"
+                )
+        else:
+            assert fact in documented, f"ChatGPT README omits {fact!r}"
+
+
 def test_claude_readme_matches_the_no_write_client_config_behaviour() -> None:
     template = cc.render("claude", _default_settings())
     assert template.writable is False

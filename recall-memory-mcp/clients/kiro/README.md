@@ -31,6 +31,16 @@ recall-memory-mcp client-config kiro --write ~/.kiro/settings/mcp.json
 Or copy `mcp.example.json` and edit it. `--write` only replaces the
 `recall-memory` entry; every other server in your file is preserved.
 
+### CLI output versus the checked-in example
+
+`client-config kiro` renders the server's active endpoint as one
+`recall-memory` entry. Its default loopback form uses the local bearer-token
+placeholder `${RECALL_MCP_TOKEN}` and is the variant that `--write` installs.
+The checked-in `mcp.example.json` additionally demonstrates a remote OAuth
+entry and a disabled loopback entry, so it is intentionally not byte-for-byte
+equal to the CLI output. The local entry must still agree on the `/mcp` URL,
+credential placeholder and read-only `autoApprove` list.
+
 ## The example file
 
 `mcp.example.json` defines two entries:

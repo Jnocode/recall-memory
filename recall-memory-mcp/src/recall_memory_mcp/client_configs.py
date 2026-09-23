@@ -32,6 +32,10 @@ CLIENTS: Final[tuple[str, ...]] = ("chatgpt", "claude", "kiro")
 SERVER_KEY: Final[str] = "recall-memory"
 TOKEN_ENV_VAR: Final[str] = "RECALL_MCP_TOKEN"
 MCP_PATH: Final[str] = "/mcp"
+CHATGPT_DEVELOPER_MODE_PATH: Final[str] = (
+    "Settings -> Security and login -> Developer mode"
+)
+CHATGPT_PLUGINS_URL: Final[str] = "https://chatgpt.com/plugins"
 
 #: Only read-only tools may ever be auto-approved (design §10, Kiro).
 READ_ONLY_TOOLS: Final[tuple[str, ...]] = (
@@ -105,9 +109,9 @@ def _chatgpt_markdown(settings: Any) -> str:
         "ChatGPT has no on-disk connector file: connectors are added in\n"
         "the app. This command therefore prints instructions and refuses\n"
         "`--write`.\n\n"
-        "1. Enable developer mode: Settings -> Security and login ->\n"
-        "   Developer mode.\n"
-        "2. Add an MCP server / plugin (https://chatgpt.com/plugins) pointing at:\n\n"
+        "1. Enable developer mode: "
+        f"{CHATGPT_DEVELOPER_MODE_PATH}.\n"
+        f"2. Add an MCP server / plugin ({CHATGPT_PLUGINS_URL}) pointing at:\n\n"
         f"       {server_url(settings)}\n\n"
         "3. Complete the OAuth authorization prompt. The token is held by the\n"
         f"   host; never paste it into a file. Local runs may use the "
@@ -267,6 +271,8 @@ def write_host_config(client: str, settings: Any, target: str | Path) -> WriteRe
 
 __all__ = [
     "CLIENTS",
+    "CHATGPT_DEVELOPER_MODE_PATH",
+    "CHATGPT_PLUGINS_URL",
     "ClientConfigError",
     "ClientTemplate",
     "READ_ONLY_TOOLS",
