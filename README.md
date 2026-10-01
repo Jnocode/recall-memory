@@ -1,388 +1,99 @@
-# recall. 🧠
-[![Hermes Memory Provider](https://img.shields.io/badge/Hermes-Memory%20Provider-blue)](https://github.com/NousResearch/hermes-agent/pull/51205)
-[![PyPI](https://img.shields.io/pypi/v/recall-sqlite)](https://pypi.org/project/recall-sqlite/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+# Recall SQLite
 
-> **🔌 Hermes plugin → [github.com/Jnocode/recall-memory-hermes](https://github.com/Jnocode/recall-memory-hermes)** — 安裝指引與 Hermes Agent 整合設定
+Recall 是自製的 SQLite 長期記憶核心：保存文字、以向量／關鍵字／FTS5 混合檢索，並提供 Hot/Warm/Cold tier 管理。它不是生成式記憶服務，也不自動把整段對話變成可信事實。
 
-<p align="center">
-  <a href="https://raw.githubusercontent.com/Jnocode/recall-memory/master/demo/recall-demo-video-narrated.mp4">
-    <img src="https://img.shields.io/badge/🎬%20看%20Demo%20影片-58s-blue?style=for-the-badge" alt="Demo Video">
-  </a>
-</p>
+本分支為 **`recall-sqlite 0.2.1` GitHub 交付候選**，配對 **`recall-memory-hermes 0.3.1`**。版本號不表示已上架 PyPI。GitHub 程式交付、PyPI 發布與使用者的 provider 切換是三件不同的事。
 
-> 👀 **非開發者？** 點上面的按鈕看 58 秒影片，了解 recall 在做什麼。不需要懂程式碼。
+## 安裝與可重現驗證
 
-**Better contextual retrieval for AI agents.**
-Three-path RRF retrieval (ANN + keyword SQL JOIN + FTS5) in pure SQLite.
-No LLM at query time. ~80ms latency. 1400 real memories.
+Python 3.10+；本機驗收使用 Python 3.11。Windows 用 Git Bash 或 PowerShell；下列是 Git Bash／POSIX shell 指令。
+
+```bash
+python -m venv .venv
+# Windows Git Bash：
+source .venv/Scripts/activate
+# Linux/macOS 改用：source .venv/bin/activate
+python -m pip install build
+python -m build --outdir ci-dist/core
+python -m pip install ci-dist/core/recall_sqlite-0.2.1-py3-none-any.whl
+```
+
+這個候選尚未發布，請安裝自己建置的 wheel，不要把 `pip install recall-sqlite` 從 index 取到的既有版本當成此分支。正式發布後才可使用 `python -m pip install recall-sqlite==0.2.1`。
+
+### Quick start：明確 DB、跨程序讀回
+
+```bash
+mkdir -p demo-data
+export RECALL_DB_PATH="$PWD/demo-data/recall.db"
+# 故意使用不可達的本機 endpoint，驗證無 embedding 時的 fallback。
+export EMBED_BASE_URL=http://127.0.0.1:65534
+recall add "cedar-17 demo prefers docker-compose" --session demo --tag semantic
+recall query "cedar-17" --include-cold
+recall stats --verbose
+# 每個 CLI 指令都是新程序；再次 query 仍讀取同一 explicit DB。
+recall query "cedar-17" --include-cold
+```
+
+PowerShell 等效設定：`$env:RECALL_DB_PATH = (Join-Path $PWD 'demo-data/recall.db')`。請先建立父目錄。CLI 沒有 `--db` 選項；使用 `RECALL_DB_PATH`，並在每個新 shell 設定同一路徑。
+
+**預設 DB 不同，不能混用：**
+
+- Core CLI：`RECALL_DB_PATH` > `DATA_DIR/recall_p0.db`；未設定 `DATA_DIR` 時，是 `recall.config` 所在檔案往上三層的 `recall_p0.db`（wheel 通常為 venv 的 `Lib/recall_p0.db`，不是目前目錄）。
+- Hermes adapter：初始化時的 active `hermes_home/recall.db`，或 provider 的 explicit `db_path`。
+- 要從 CLI 查看 Hermes 的庫，必須把 `RECALL_DB_PATH` 指向 adapter 的實際 `db_path`。不要依賴兩者預設相同。
+
+Python API：
 
 ```python
-from recall import retrieve_relevant
-store.add("User prefers docker-compose over Dockerfile")
-results = retrieve_relevant("How should I deploy?", store)
-# → "User prefers docker-compose over Dockerfile"
+from recall import Memory, SQLiteStore, retrieve_relevant
+store = SQLiteStore("demo-data/recall.db")
+store.add(Memory(content="cedar-17 demo uses docker-compose", tag="semantic", session_id="demo"))
+results = retrieve_relevant("cedar-17", store, k=5, tag_filter="semantic")
+print([memory.content for memory in results])
 ```
 
-## Prerequisites: Embedding Model
+## Embedding 與限制
 
-recall. uses **nomic-embed-text-v1.5** (768-dim) running in LM Studio.
-No LLM — embedding models are tiny (~150MB), fast, and cost zero tokens.
+核心預設 `http://127.0.0.1:1234`、`nomic-embed-text-v1.5`，透過 OpenAI-compatible `/v1/embeddings` 呼叫；可設定 `EMBED_BASE_URL`、`EMBED_PORT`、`EMBED_MODEL`。預設向量維度是 **768**，換模型前需確認維度與既有 DB 一致。
 
-### 1. Install LM Studio
+- Endpoint 不可用時使用可用的 keyword／FTS5 路徑；不保證語意相同但無詞彙重疊的查詢命中。
+- CLI `add` 不產生向量；Python／adapter 呼叫 `embed()` 後才會寫向量。沒有背景自動 backfill。
+- 未命中 RRF 時會有有限範圍的 `get_all` fallback，可能返回不相關內容；結果必須核對來源。
+- FTS 使用 `porter unicode61`，不是 jieba 或中文語意分詞。
+- `session_id_filter` 是 optional，並保留 empty-session legacy 記憶；不是安全／tenant 授權邊界。Adapter 的 project 過濾也不是 ACL。
+- 檢索可更新存取次數／tier；`delete`、`clear`、`gc` 與超過核心 GC 水位後的寫入可能刪除資料。正式庫先備份，這輪不執行清理。
+- 不承諾固定延遲、不宣稱優於其他記憶系統；舊 benchmark 不是本候選的 A/B 證據。
 
-Download from [lmstudio.ai](https://lmstudio.ai).
+## 實作範圍與規格邊界
 
-### 2. Load the embedding model
+| 範圍 | 本候選狀態 |
+|---|---|
+| `src/recall/store.py`, `retrieve.py`, `embed.py`, `cli.py` | 可安裝的 legacy SQLite 核心；本機測試／wheel smoke 覆蓋 |
+| sqlite-vec `k` constraint、session filter、retrieval score、cold promotion 邊界 | fetched source 已存在；保存並新增真實 sqlite-vec 回歸測試，不用舊 runtime 覆蓋 |
+| `migrations.py`, `mcp_repository.py`, `authority_lock.py` | 另一路 MCP authority 實作與測試；legacy `SQLiteStore` 不會自動啟用 scope/CAS/soft delete/authority lock |
+| `recall-memory-mcp/` | 已有獨立 alpha distribution；保留既有來源，與 Hermes legacy adapter 不同 |
+| `recall-core/`, `recall-server/`, mobile、extension、sync daemon | 不在本交付範圍；不宣稱此 wheel 已提供跨裝置同步或全客戶端單一權威 |
 
-| Step | Screenshot / Cmd |
-|------|------------------|
-| Open LM Studio → **Models** tab | — |
-| Search `nomic-embed-text-v1.5` → Download | ~150MB |
-| Switch to **Local Inference Server** tab | — |
-| Select `nomic-embed-text-v1.5` in the model dropdown | — |
-| Click **Start Server** | port defaults to `1234` |
-| Verify it's working: | `curl http://127.0.0.1:1234/v1/models` |
+[`SPEC.md`](SPEC.md) 是設計規範，不是 legacy runtime 的功能清單。Hermes 安裝與回切見 [adapter README](https://github.com/Jnocode/recall-memory-hermes)；詳細保存策略見 [`docs/preservation.md`](docs/preservation.md)。Deprecated `recall.recall_mcp` 不作為本輪建議安裝面；新的 MCP alpha 指引位於 [`recall-memory-mcp/README.md`](recall-memory-mcp/README.md)。
 
-Expected response:
-```json
-{"object":"list","data":[{"id":"nomic-embed-text-v1.5","object":"model",...}]}
-```
+## 保存與恢復
 
-**That's it.** No API keys, no cloud services, no GPU required beyond what LM Studio needs (~2GB VRAM, also runs on CPU).
+保留原 DB、一致性 SQLite backup、core/adapter 配對 wheel、checksum 與版本紀錄；**不要把私人 DB、對話、設定憑證上傳 GitHub**。資料庫使用 WAL，運行中不能只複製 `.db` 而忽略已提交 WAL；使用 SQLite backup API，或停止所有 Recall writer 後再做完整備份。
 
-### Port configuration
+回切到 Recall 時，先在 DB 備份的副本上安裝上述配對 wheel、執行 `stats/query`，再依 adapter 文件選定 `memory.provider: recall-memory-hermes`、設定原庫位置並啟動新 session。切換 provider 不會自動匯入另一系統的新記憶，也不要刪除另一 provider 的資料。
 
-Default port is `1234`. Override with environment variables instead of editing source:
-```bash
-export EMBED_PORT=1235                           # LM Studio on this host, other port
-export EMBED_BASE_URL=http://192.168.1.20:1234   # LM Studio on another host/container
-```
-`EMBED_BASE_URL` wins over `EMBED_PORT`. Health checks and the offline test skip
-probe the same base URL that embeddings are actually sent to.
-
-### If LM Studio is down
-
-Graceful degradation kicks in automatically:
-
-- **retrieval** (`mcp_recall_recall` / `recall query`) falls back to keyword + FTS5 search — no crash, just no ANN path
-- **storage** (`mcp_recall_store_memory` / `recall add`) saves memories without embeddings — still findable via keywords
-- **CLI** (`recall add/stats/delete`) unaffected — doesn't use embeddings at all
-
-No error, no crash, no data loss. Just slightly less precise results.
-
----
-
-## Quick start
+## 開發與打包
 
 ```bash
-pip install numpy
-pip install -e .
-
-recall add "User prefers docker-compose for local dev"
-recall query "How to deploy?"
+python -m pip install -e ".[dev]" build twine
+python scripts/version_sync_check.py
+# test_p0_improvements 依賴未納入交付的 recall-server 雛形，刻意排除。
+python -m pytest -q tests --ignore=tests/test_p0_improvements.py
+python -m build --outdir ci-dist/core
+python scripts/verify_distributions.py ci-dist/core
+python -m twine check ci-dist/core/*
 ```
 
-Or via MCP server for Hermes Agent / Antigravity IDE / Gemini CLI:
+建置產物放 CI artifacts，不提交 `dist/` 或 egg-info。CI 在 master、`preserve/**` push、PR 或手動 dispatch 執行；`publish.yml` 的 `v*` tag 會發布 PyPI，**未獨立授權前不要建立／推送 tag**。
 
-### Hermes (local install)
-
-If recall is installed in the same Python env as Hermes:
-```yaml
-# ~/.hermes/config.yaml
-mcp_servers:
-  recall:
-    command: "python"
-    args: ["-m", "recall.recall_mcp"]
-    timeout: 30
-    cwd: "/path/to/recall-memory"   # optional, needed for DB path resolution
-```
-
-### Hermes (Docker)
-
-```yaml
-# ~/.hermes/config.yaml
-mcp_servers:
-  recall:
-    command: docker
-    args:
-      - run
-      - -i
-      - --rm
-      - --network=host
-      - -v
-      - recall-data:/data
-      - recall-memory:latest
-    timeout: 30
-```
-
-Build the image first:
-```bash
-cd /path/to/recall-memory
-docker compose build
-```
-
-## Architecture
-
-```text
-store.py       — SQLite backend + tier management
-embed.py       — Nomic Embed via LM Studio REST API (768-dim)
-retrieve.py    — Three-path RRF retrieval + tier router
-cli.py         — Typer CLI (add / query / stats / delete / gc)
-recall_mcp.py  — MCP server for agent integration
-```
-
-### Tiered Storage (v0.2.0+)
-
-Memories are split into three tiers to reduce compute and memory:
-
-| Tier | Capacity | Retrieval | Compute Cost |
-|------|:--------:|:----------|:------------:|
-| **Hot** | ~500 | ANN + keywords + FTS5 (3-path RRF) | Highest |
-| **Warm** | ~5000 | keywords + FTS5 only (2-path RRF) | Medium |
-| **Cold** | Unlimited | Not indexed, fill-gap fallback only | ~Zero |
-
-- **Hot**: full vectors in ANN index. Fastest search.
-- **Warm**: keyword/FTS5 only, no vectors. 66–99% less ANN work.
-- **Cold**: doesn't participate in normal queries. Only searched when hot+warm results are insufficient.
-
-Promotion/demotion is automatic based on access frequency. Cold memories are sampled every N queries for keyword overlap—if relevant, they're promoted back to warm. No cron, no UI, no configuration needed.
-
-Three parallel retrieval paths, fused via RRF (Reciprocal Rank Fusion):
-
-```text
-Path V: Vector search (ANN) — sqlite-vec cosine similarity (hot tier only)
-Path K: Keyword SQL JOIN — multi-hop keyword expansion (all tiers)
-Path F: FTS5 full-text search — porter tokenizer + unicode61 (all tiers)
-
-Tier router → hot 3-path → warm 2-path → cold fill-gap
-```
-
-No LLM calls at query time. No vector database. Just SQLite.
-
-## Installation
-
-### Dependencies
-
-| Dependency | Required? | Notes |
-|-----------|-----------|-------|
-| Python ≥3.10 | ✅ | — |
-| numpy | ✅ | Cosine similarity + vector ops |
-| typer | ✅ | CLI interface |
-| sqlite-vec | ✅ | SQLite extension for ANN |
-| LM Studio (port 1234) | ✅ | Runs nomic-embed-text-v1.5. See Prerequisites above. |
-| pytest | ❌ | Only needed for development (`pip install -e ".[dev]"`) |
-| sentence-transformers | ❌ | Not used. The actual embedding calls go through LM Studio's HTTP API. |
-
-```bash
-pip install numpy
-pip install -e .      # installs recall-memory package + pulls sqlite-vec
-```
-
-### Verify installation
-
-```bash
-recall stats
-# → Memories: 0  Keywords: 0
-```
-
-## Usage
-
-### CLI
-
-```bash
-recall add "content"           # Store a memory
-recall query "question"        # Retrieve relevant memories (tiered)
-recall query "question" --include-cold  # Force search cold tier too
-recall stats                   # Store statistics
-recall stats --verbose         # + tier distribution
-recall gc --dry-run            # Preview eviction candidates
-recall gc                      # Run garbage collection
-recall delete <id>             # Remove a memory
-```
-
-### MCP Tools (Hermes / Antigravity / Gemini)
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `recall` | `query: str` (required), `k: int (default 5)`, `include_cold: bool (default false)` | `{memories: [...], count: int}` |
-| `store_memory` | `content: str` (required), `session_id: str`, `tag: str` | `{id: str, status: "stored"}` |
-| `memory_stats` | (none) | `{memories: int, keywords: int, tiers: {hot, warm, cold}}` |
-| `gc_memory` | `dry_run: bool (default false)` | `{evicted/ candidates: int, db_size_mb: float}` |
-
-### Tiered Storage — How It Works
-
-v0.2.0 introduced tiered storage to reduce compute and memory.
-Here's what happens under the hood — you don't need to configure anything.
-
-**Query flow:**
-```
-You: recall query "docker compose"
-  → Hot tier (3-path RRF: ANN + keywords + FTS5)     ← ~500 fastest memories
-  → Warm tier (2-path RRF: keywords + FTS5 only)     ← ~5000 fallback
-  → Cold tier (keywords + FTS5, promoted on hit)      ← everything else
-  → Results returned
-```
-
-- **Hot**: memories with vector embeddings. ANN search runs here. ~80ms.
-- **Warm**: no vectors, but keyword + FTS5 still work. Slightly lower relevance.
-- **Cold**: doesn't participate in normal queries. Only used if hot+warm results are insufficient.
-
-**Promotion/demotion happens automatically:**
-- A memory you frequently query gets promoted to higher tiers
-- Unused memories gradually shift to lower tiers over time
-- Cold tier is sampled every 20 queries — if a cold memory's keywords match your query, it gets promoted back to warm
-
-**When to use `--include-cold`:**
-If you're searching for something very old or obscure that didn't appear in results, add this flag to force a full scan.
-
-**When to run `gc`:**
-Never, unless you care about disk space. Auto-triggers at 80MB DB size.
-`recall gc --dry-run` previews what would be deleted.
-`recall gc` actually deletes low-score memories (score < 0.5, rarely accessed).
-
-**What tiered storage does NOT change:**
-- Query syntax is identical
-- No configuration files to edit
-- No cron jobs or background processes
-- Schema migration is automatic on `pip install --upgrade`
-
-## FAQ
-
-### Q: Can hardcoded hot/warm capacity limits cause thrashing?
-
-No. Three layers of protection:
-
-1. **24h cooldown** — a demoted memory cannot be promoted back for 24 hours
-2. **Lifetime threshold** — `access_count ≥ 3` required before promotion triggers
-3. **Batch operation** — `replenish_hot()` runs during writes, not on the query path
-
-### Q: What state does a query see while promote/demote is in progress?
-
-SQLite WAL mode guarantees every reader sees a complete snapshot of the transaction as it began. There is no "tier updated but vector not yet written" intermediate state.
-
-However, promote is not a single atomic operation:
-1. `UPDATE tier='hot'` → commit
-2. `INSERT vec_embedding` → commit
-
-A crash between step 1 and step 2 leaves a tier=hot memory with no vector. This memory is still retrievable via keyword+FTS5 — it just won't appear in ANN search results until reindexed.
-
-### Q: Can frequent writes bloat the WAL file beyond 80MB?
-
-These are two different numbers:
-- **80MB** is the eviction threshold for the main DB file (auto-delete low-score memories), not the WAL size
-- **WAL** is a temporary journal; auto-checkpoint (~4MB default) flushes it back to the main DB and clears it
-
-Promote/demote does not fire on every write. It triggers in two cases:
-1. A cold memory is hit during query (cold→warm promote)
-2. The main DB exceeds 80MB (GC demotion)
-
-Each promote is 1-2 INSERT/DELETE statements, not hundreds of rows. The current DB is 32MB — far below the 80MB threshold.
-
-### Q: Will this wear out an SSD on edge devices?
-
-Each memory write (including all indexes) is ~9KB. At ~17 new memories per day, that's ~56MB per year. Modern SSDs are rated for hundreds of TBW — this amount is below the noise floor.
-
-### Q: Does promote/demote slow down store() under heavy writes?
-
-Currently no. GC checks DB size (`_gc_if_needed()`) **after** `store()` commits, and at 32MB < 80MB threshold it's just a `stat()` call (<1ms).
-
-If the DB eventually exceeds 80MB, GC runs eviction before `store()` returns. At that point you can raise the threshold or disable auto-GC and run `recall gc` manually.
-
-### Q: Why 24 hours for the cooldown?
-
-24h is a conservative default to prevent thrashing. A memory demoted to cold was likely not accessed for a long time — if it becomes relevant again within 24 hours, lazy sampling (every 20 queries) will catch it and promote it back. Adjust `COOLDOWN_HOURS` in `store.py` to change.
-
-### Q: How does this compare to Mem0 / Honcho?
-
-| Aspect | recall-sqlite | Mem0 | Honcho |
-|--------|:-------------:|:----:|:------:|
-| Query-time LLM | Zero | Every call | Every call |
-| Forgetting mechanism | ✅ Auto tier demotion | ❌ None | ❌ None |
-| Vector DB | None (SQLite) | Qdrant/PGVector | PostgreSQL |
-| API Key required | No | Yes | Yes |
-| Offline capable | ✅ (graceful fallback) | ❌ | ❌ |
-| Data storage | Single SQLite file | Self-hosted | Cloud/self-hosted |
-| p50 latency | ~80ms | ~890ms | ~1,420ms |
-
-### Q: Will there be multi-device sync / CRDT support?
-
-Yes — as of v0.3, multi-device sync ships via `recall-sync` (see
-[docs/multi-device-sync.md](docs/multi-device-sync.md)). Each writer keeps its
-own SQLite file; a sync daemon merges them on a schedule with
-last-write-wins conflict resolution. No CRDT — deliberately simple.
-
-For remote access (phone not on LAN), pair it with Tailscale.
-
-## What's new in v0.3
-
-Cross-carrier long-term memory + mobile support:
-
-- **Retrieval scores** — `Memory.score` is filled by retrieval and surfaced through the MCP tools, REST API, and Hermes plugin output
-- **Session isolation** — `session_id_filter` on all retrieval paths prevents context bleeding between projects; legacy memories (empty session) stay visible
-- **sync_turn v1** — Hermes plugin now stores both user and assistant turns
-- **Multi-device sync** — `recall-sync` daemon merges Hermes DB ↔ server DB ([docs](docs/multi-device-sync.md))
-- **HTTP MCP endpoint** — any MCP client can connect to `recall-server /mcp` over the network; optional API-key auth ([docs](docs/ai-carrier-integration.md))
-- **Extension** — now also captures Gemini and Grok conversations
-- **Mobile offline mode** — Flutter app keeps a local SQLite mirror (incremental pull sync); offline search runs 2-path retrieval (keyword index + full-text) on device, and offline writes queue until reconnect
-- **Fix** — sqlite-vec ≥0.1.x KNN query syntax (`k = N` constraint); missing imports in tiered retrieval
-
-## Status
-
-Production-ready MVP with tiered storage (v0.2.0). Tested against AIngram (tied on 1400 memories × 40 queries).
-
-```text
-Memories: 1400 (from Honcho)
-Keywords: 10560
-Latency:  ~80ms/query (hot), ~60ms/query (warm fill-gap)
-ANN scan: -66% (now) → -99% (at 50K memories)
-Memory:   ~1.5MB fixed for hot tier vs linear growth
-Eval:     recall@5 comparable to AIngram with full extractor
-```
-
-## Upgrading
-
-### From v0.1.x to v0.2.0
-
-```bash
-pip install --upgrade recall-sqlite
-```
-
-Schema migration is automatic — SQLite `ALTER TABLE` runs on first start.
-No manual steps needed. Your existing memories are preserved and will start
-in the "hot" tier.
-
-To verify:
-```bash
-recall stats --verbose
-# Should show the same memory count with tier distribution
-```
-
-### Rollback
-
-```bash
-pip install recall-sqlite==0.1.0
-```
-
-## Design decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| Three-path RRF | ANN + SQL JOIN + FTS5 covers different failure modes |
-| No LLM re-rank | Extra latency + cost; not needed for retrieval quality |
-| SQLite first | Zero-deployment, portable, git-committable |
-| Nomic embed via LM Studio | 768-dim, better than MiniLM, no Python packaging hell |
-| RRF fusion | No weight tuning needed; standard IR technique |
-
-## Comparison with AIngram
-
-| System | R@5 (40 mems) | R@5 (1400 mems) | Latency |
-|--------|:------------:|:--------------:|:-------:|
-| recall. | 0.579 | ~0.58 | ~80ms |
-| AIngram | 0.583 | ~0.58 | ~27ms |
-
-Both systems tied on identical embedding model. recall.'s advantage: three-path architecture (AIngram uses two-path when extractor is unavailable).
-
-## License
-
-Apache 2.0
+Apache-2.0，見 [LICENSE](LICENSE)。

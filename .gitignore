@@ -9,8 +9,8 @@ __pycache__/
 recall-memory-mcp/build/
 recall-memory-mcp/dist/
 
-# Local/CI build scratch. `dist/` at the repository root stays tracked on
-# purpose; these are throwaway outputs and must never be staged.
+# Generated packages are CI artifacts, never maintained source.
+/dist/
 /build/
 /ci-dist/
 /ci-venv/

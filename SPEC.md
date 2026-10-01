@@ -1,4 +1,6 @@
-# Recall Core — Official Specification (SPEC.md)
+# Recall Core — 設計規範（非 legacy runtime 功能清單）
+
+> 本文件包含跨客戶端 authority 目標與部分獨立 MCP 實作。`recall-sqlite` legacy `SQLiteStore`／Hermes adapter 不自動啟用 scope、CAS、soft delete 或 authority lock；可交付範圍與限制以 [README.md](README.md) 為準。規格中的效能、embedding 維度相容性、分詞及整合宣稱必須另行驗證，不代表此候選已全部實作。
 
 > Version: 0.2.0 / 0.3.0 Ready
 > Status: Canonical Core Specification
