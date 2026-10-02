@@ -1,0 +1,11 @@
+include LICENSE README.md README.zh-TW.md
+include SPEC.md
+include docs/preservation.md
+recursive-include scripts *.py
+recursive-include tests *.py
+exclude tests/test_p0_improvements.py
+global-exclude *.db *.db-wal *.db-shm *.sqlite *.sqlite3 *.log *.jsonl *.pem *.key
+prune dist
+prune build
+prune ci-dist
+prune recall-memory-mcp

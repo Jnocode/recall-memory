@@ -8,8 +8,8 @@ the checkout::
 
 Why it is not just ``import recall_memory_mcp``:
 
-``recall-sqlite`` 0.2.0 is already published on PyPI, and the canonical core in
-this repository still carries the same 0.2.0 version while its content has moved
+``recall-sqlite`` 0.2.0 is already published on PyPI. The canonical core in
+the historical checkout carried the same 0.2.0 version while content had moved
 on. A plain ``pip install --find-links <local dist> <mcp wheel>`` therefore
 happily satisfies ``recall-sqlite>=0.2.0,<0.3`` from the *index* instead of the
 locally built wheel -- this was observed, not hypothesised -- and CI would then

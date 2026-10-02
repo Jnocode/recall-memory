@@ -6,7 +6,7 @@ name: CI
 
 on:
   push:
-    branches: [master, "feature/**"]
+    branches: [master, "feature/**", "preserve/**"]
   pull_request:
     branches: [master]
   workflow_dispatch:
@@ -70,6 +70,7 @@ jobs:
         run: >-
           python -m pytest -q -p no:cacheprovider
           tests/test_core.py
+          tests/test_preservation.py
           tests/test_mcp_schema_migration.py
           tests/test_mcp_repository.py
           tests/test_mcp_concurrency.py
@@ -104,6 +105,9 @@ jobs:
 
       - name: Build MCP distribution (recall-memory-mcp)
         run: python -m build --outdir ci-dist/mcp recall-memory-mcp
+
+      - name: Inspect core package members
+        run: python scripts/verify_distributions.py ci-dist/core
 
       - name: twine check
         run: python -m twine check ci-dist/core/* ci-dist/mcp/*
