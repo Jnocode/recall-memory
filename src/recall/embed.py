@@ -94,16 +94,21 @@ def embed_batch(texts: list[str]) -> list[list[float] | None]:
 
 
 def is_loaded() -> bool:
-    """Check if the embedding backend is reachable.
+    """Check if the embedding backend is reachable and the model is available.
 
-    Probes the same base URL that ``embed`` actually talks to. Reading only
-    ``EMBED_PORT`` here would probe the default port even when
-    ``EMBED_BASE_URL`` points somewhere else, so the offline skip-in
-    (``skipif(not is_loaded())``) and the live calls could disagree.
+    Probes the same base URL that ``embed`` actually talks to, and verifies
+    that ``EMBED_MODEL`` (or an alias like ``{EMBED_MODEL}:latest``) is served.
+    If the backend is reachable but the requested model is not loaded/available,
+    returns False so tests degrade gracefully rather than failing assertions.
     """
     try:
         req = urllib.request.Request(f"{EMBED_BASE_URL}/v1/models")
-        urllib.request.urlopen(req, timeout=2)
-        return True
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read().decode())
+            model_ids = [m.get("id", "") for m in data.get("data", [])]
+            return any(
+                EMBED_MODEL == mid or mid.startswith(f"{EMBED_MODEL}:")
+                for mid in model_ids
+            )
     except Exception:
         return False
