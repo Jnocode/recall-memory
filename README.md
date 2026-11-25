@@ -87,12 +87,24 @@ print([memory.content for memory in results])
 ```bash
 python -m pip install -e ".[dev]" build twine
 python scripts/version_sync_check.py
-# test_p0_improvements 依賴未納入交付的 recall-server 雛形，刻意排除。
-python -m pytest -q tests --ignore=tests/test_p0_improvements.py
+# 預設是無 embedding 服務／GPU 也可執行的 CPU 單元測試。
+# 未安裝的 recall-server 雛形依賴會以具體原因跳過，不冒充通過。
+python -m pytest tests/ -ra
 python -m build --outdir ci-dist/core
 python scripts/verify_distributions.py ci-dist/core
 python -m twine check ci-dist/core/*
 ```
+
+`tests/test_embed_unit.py` 以 mock 覆蓋模型清單、連線失敗、逾時與 embedding
+快取；預設不探測真實 embedding 服務。需要驗證真實 768 維模型時，明確啟用：
+
+```bash
+RECALL_TEST_EMBEDDINGS=1 python -m pytest tests/test_core.py::test_embed -ra
+```
+
+這個整合測試使用 `EMBED_BASE_URL`／`EMBED_PORT`／`EMBED_MODEL`，不限於 LM
+Studio。後端不可達或未列出指定模型時跳過；若已列出模型但實際 embedding
+呼叫失敗，仍然失敗，不降格為 skip。單元測試綠燈不代表真實後端可用。
 
 建置產物放 CI artifacts，不提交 `dist/` 或 egg-info。CI 在 master、`preserve/**` push、PR 或手動 dispatch 執行；`publish.yml` 的 `v*` tag 會發布 PyPI，**未獨立授權前不要建立／推送 tag**。
 
