@@ -41,6 +41,12 @@ entry and a disabled loopback entry, so it is intentionally not byte-for-byte
 equal to the CLI output. The local entry must still agree on the `/mcp` URL,
 credential placeholder and read-only `autoApprove` list.
 
+The endpoint follows the active `ServerSettings`: IPv4 and `localhost` keep
+their normal spelling; an IPv6 loopback host is bracketed, for example
+`http://[::1]:8765/mcp`. In remote mode the configured public HTTPS URL takes
+precedence. Valid generated JSON proves the template contract, not a live
+Kiro connection or cross-client memory read-back.
+
 ## The example file
 
 `mcp.example.json` defines two entries:

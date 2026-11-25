@@ -133,6 +133,35 @@ def test_write_is_refused_for_ui_configured_hosts(client, tmp_path: Path, isolat
     assert "connector" in err.lower() or "ui" in err.lower()
 
 
+@pytest.mark.parametrize("client", client_configs.CLIENTS)
+@pytest.mark.parametrize(
+    ("host", "port", "authority"),
+    [
+        ("127.0.0.1", 8765, "127.0.0.1:8765"),
+        ("localhost", 9876, "localhost:9876"),
+        ("::1", 8765, "[::1]:8765"),
+    ],
+)
+def test_all_client_templates_render_a_valid_loopback_url(
+    client, host, port, authority, isolated_env,
+) -> None:
+    from urllib.parse import urlsplit
+
+    env = dict(isolated_env, RECALL_MCP_HOST=host, RECALL_MCP_PORT=str(port))
+    settings = cli.resolve_settings(env)
+    template = client_configs.render(client, settings)
+    expected = f"http://{authority}/mcp"
+    assert client_configs.server_url(settings) == expected
+    if template.format == "json":
+        assert template.payload is not None
+        assert template.payload["mcpServers"][client_configs.SERVER_KEY]["url"] == expected
+    else:
+        assert expected in template.text
+    parsed = urlsplit(expected)
+    assert parsed.hostname == host
+    assert parsed.port == port
+
+
 # ---------------------------------------------------------------------------
 # --write behaviour
 # ---------------------------------------------------------------------------

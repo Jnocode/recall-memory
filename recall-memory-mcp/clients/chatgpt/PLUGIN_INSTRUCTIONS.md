@@ -1,8 +1,10 @@
 # Recall memory — connector instructions
 
-Paste the block below into the ChatGPT connector's instructions field.
-Everything above the horizontal rule is commentary for you; everything below it
-is for the model.
+The block below is an operator/model policy reference, not a host configuration
+file. The server advertises its core policy through MCP's `instructions` field;
+this expanded sheet is not automatically installed into ChatGPT. Everything
+above the horizontal rule is commentary for you; everything below it is for
+the model.
 
 The point of these instructions is to make the model call a tool *when it
 should*, and to stop it saving the conversation. A memory store that fills up
@@ -45,8 +47,7 @@ relevant, say so and continue — do not keep re-querying with synonyms.
 
 Call `memory_add` only when **all** of these hold:
 
-1. The user explicitly asked you to remember it, **or** stated a durable fact,
-   decision, preference or constraint that will still matter next week.
+1. The user explicitly asked you to remember it.
 2. It is a single self-contained statement, not a summary of the chat.
 3. It is not already in the store — search first.
 

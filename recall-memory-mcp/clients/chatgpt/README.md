@@ -3,16 +3,17 @@
 Connect ChatGPT to your local `recall-memory-mcp` authority so it reads and
 writes the same memories as Claude, Kiro and your IDE agents.
 
-Every UI path and requirement below is taken from OpenAI's current developer
-documentation. The exact documents that were fetched, with their SHA-256
-digests and the date they were read, are recorded in
-`artifacts/recall-mcp-cross-client/evidence/phase7-doc-sources.json`. If a step
-here does not match what you see, trust the vendor page and open an issue —
-do not improvise a different flow.
+The custom-MCP connection flow was rechecked against both OpenAI guides below
+on 2026-11-25. Earlier source digests are recorded in the maintenance artifact
+`artifacts/recall-mcp-cross-client/evidence/phase7-doc-sources.json`; that
+historical record is not evidence that every vendor page remains unchanged.
+If a step here does not match the current vendor page, trust the vendor page
+and open an issue — do not improvise a different flow.
 
 Primary sources:
 
 - <https://developers.openai.com/plugins/deploy/connect-chatgpt>
+- <https://developers.openai.com/api/docs/guides/custom-mcp-server>
 - <https://developers.openai.com/plugins/build/mcp-server>
 - <https://developers.openai.com/api/docs/guides/secure-mcp-tunnels>
 
@@ -28,6 +29,12 @@ Primary sources:
   Tunnel into your private network.
 - `http://127.0.0.1:8765/mcp` is reachable *only from your own machine*.
   Pasting it into ChatGPT will not work. Pick one of the two options below.
+
+`client-config chatgpt` renders Markdown guidance, not Kiro's `mcpServers`
+JSON. Its endpoint follows the same active `ServerSettings`: an IPv6 loopback
+URL is written as `http://[::1]:8765/mcp`, and a configured public HTTPS URL
+takes precedence in remote mode. A syntactically valid loopback URL is still
+local-only; it does not remove the reachability requirement above.
 
 ## Step 1 — run the authority
 
@@ -92,14 +99,14 @@ Two permissions are involved and they are granted by different people:
 - Creating or editing a tunnel needs Tunnels **Read + Manage**; running
   `tunnel-client` or selecting the tunnel needs Tunnels **Read + Use**. These
   come from the Platform organization owner or RBAC admin.
-- ChatGPT developer mode is a separate workspace permission. On Enterprise/Edu
-  a workspace admin grants it first.
+- Adding and using a custom MCP server is subject to account and workspace
+  permissions and security restrictions, including Lockdown.
 
 A tunnel must be associated with the ChatGPT workspace that should list it. A
 tunnel associated only with a personal Platform organization will not appear in
 an Enterprise/Edu workspace.
 
-Secure MCP Tunnel supports private connections and developer-mode testing. It
+Secure MCP Tunnel supports private connections and local MCP testing. It
 does **not** satisfy public plugin submission.
 
 ### Option B — public HTTPS endpoint
@@ -117,41 +124,41 @@ deliberate, and it is the only reason this option is safe to publish. The
 endpoint must keep the `/mcp` path, support streamable HTTP, and preserve its
 authentication boundary.
 
-## Step 3 — enable developer mode
+## Step 3 — check account and workspace policy
 
-In ChatGPT:
-
-1. Open **Settings**.
-2. Select **Security and login**.
-3. Turn on **Developer mode**.
-
-Availability depends on account and workspace policy; on Enterprise/Edu an
-admin must grant it before the toggle appears.
+Use ChatGPT on the web. Workspace permissions and security restrictions apply
+to adding and using custom MCP servers. Follow the current custom-MCP-server
+guide linked above rather than assuming an older settings-menu toggle exists.
 
 ## Step 4 — add the MCP server
 
 1. Go to **ChatGPT Plugins** (<https://chatgpt.com/plugins>).
-2. Select the plus button.
+2. Select the plus button, then **Add custom MCP server**.
 3. Enter a user-facing name and description — for example
    `Recall memory` / `Shared long-term memory across my AI tools`.
 4. Under **Connection**, choose the connection method:
    - For a public endpoint, enter the full MCP URL **including the `/mcp` path**.
    - For Secure MCP Tunnel, select **Tunnel**, then choose the tunnel or enter
      its `tunnel_id`.
-5. Create the connection.
-6. Review the tools and metadata discovered from the server.
+5. Configure authentication for this server.
+6. Review the risk warning and select **I understand and want to continue**.
+7. Select **Create as a plugin**.
+8. Review the discovered tools and metadata, then install the resulting plugin.
+9. In a new conversation, type **@** and select the installed plugin.
 
 If ChatGPT cannot connect, verify the endpoint with MCP Inspector first, or
 check the tunnel's workspace association and `tunnel-client` status. Resolve
 transport, initialization, schema or authentication errors there — a connector
 that shows as "connected" but never calls a tool has proven nothing.
 
-## Step 5 — paste the usage policy
+## Step 5 — review the usage policy
 
-Open `PLUGIN_INSTRUCTIONS.md` next to this file and paste it into the
-connector's instructions field. Without it ChatGPT will guess when to save,
-and the usual guess is "save everything", which is exactly what this project
-refuses to do.
+Read `PLUGIN_INSTRUCTIONS.md` next to this file as the operator/model policy.
+The server already advertises its core policy through MCP's `instructions`
+field, defined by `SERVER_INSTRUCTIONS` in `server.py`. The expanded sheet is
+not automatically installed by `client-config`; do not assume ChatGPT exposes
+an editable connector-specific instructions field. Keep write confirmations
+manual and verify that the installed plugin follows the policy in actual calls.
 
 ## Step 6 — prove it actually works
 

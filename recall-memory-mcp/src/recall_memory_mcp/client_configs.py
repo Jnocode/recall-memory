@@ -5,8 +5,8 @@ configuration or instruction sheet.  Touching a host configuration file
 requires an explicit ``--write``, a byte-for-byte backup first, and a JSON
 read-back afterwards.
 
-Two of the three hosts are configured through their own UI (ChatGPT Desktop
-developer mode; Claude Desktop custom connectors) — for those we emit
+Two of the three hosts are configured through their own UI (ChatGPT custom
+MCP plugins; Claude Desktop custom connectors) — for those we emit
 guidance and *refuse* to write a file rather than invent a config format.
 Only Kiro consumes an ``mcpServers`` JSON file, per the configuration
 contract recorded in `.kiro/specs/recall-mcp-cross-client/design.md` §10.
@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Final, Literal
 
 from .provisioning import harden_file
+from .settings import ServerSettings
 
 #: Hosts covered by R9.5.  IDE agents are task 7.12, not this command.
 CLIENTS: Final[tuple[str, ...]] = ("chatgpt", "claude", "kiro")
@@ -32,9 +33,8 @@ CLIENTS: Final[tuple[str, ...]] = ("chatgpt", "claude", "kiro")
 SERVER_KEY: Final[str] = "recall-memory"
 TOKEN_ENV_VAR: Final[str] = "RECALL_MCP_TOKEN"
 MCP_PATH: Final[str] = "/mcp"
-CHATGPT_DEVELOPER_MODE_PATH: Final[str] = (
-    "Settings -> Security and login -> Developer mode"
-)
+CHATGPT_ADD_SERVER_ACTION: Final[str] = "Add custom MCP server"
+CHATGPT_CREATE_PLUGIN_ACTION: Final[str] = "Create as a plugin"
 CHATGPT_PLUGINS_URL: Final[str] = "https://chatgpt.com/plugins"
 
 #: Only read-only tools may ever be auto-approved (design §10, Kiro).
@@ -72,15 +72,16 @@ class WriteReport:
     owner_only: bool
 
 
-def server_url(settings: Any) -> str:
+def server_url(settings: ServerSettings) -> str:
     """The MCP endpoint a host should connect to."""
 
-    if getattr(settings, "public_url", None):
+    if settings.public_url:
         return settings.public_url.rstrip("/") + MCP_PATH
-    return f"http://{settings.host}:{settings.port}{MCP_PATH}"
+    host = f"[{settings.host}]" if ":" in settings.host else settings.host
+    return f"http://{host}:{settings.port}{MCP_PATH}"
 
 
-def kiro_payload(settings: Any) -> dict[str, Any]:
+def kiro_payload(settings: ServerSettings) -> dict[str, Any]:
     return {
         "mcpServers": {
             SERVER_KEY: {
@@ -103,27 +104,31 @@ _USAGE_POLICY = (
 )
 
 
-def _chatgpt_markdown(settings: Any) -> str:
+def _chatgpt_markdown(settings: ServerSettings) -> str:
     return (
         "# Recall memory — ChatGPT\n\n"
         "ChatGPT has no on-disk connector file: connectors are added in\n"
         "the app. This command therefore prints instructions and refuses\n"
         "`--write`.\n\n"
-        "1. Enable developer mode: "
-        f"{CHATGPT_DEVELOPER_MODE_PATH}.\n"
-        f"2. Add an MCP server / plugin ({CHATGPT_PLUGINS_URL}) pointing at:\n\n"
+        f"1. Open ChatGPT Plugins ({CHATGPT_PLUGINS_URL}); select the plus "
+        f"button, then {CHATGPT_ADD_SERVER_ACTION}. Account and workspace "
+        "policies apply.\n"
+        "2. Under Connection, configure the MCP server URL:\n\n"
         f"       {server_url(settings)}\n\n"
-        "3. Complete the OAuth authorization prompt. The token is held by the\n"
-        f"   host; never paste it into a file. Local runs may use the "
-        f"`{TOKEN_ENV_VAR}` environment variable instead.\n"
-        "4. A loopback URL is only reachable from this machine. To reach it\n"
+        "3. Configure authentication for your deployment. For OAuth, complete "
+        "the authorization prompt; the host holds the token, never a file.\n"
+        "4. Review the risk warning, select I understand and want to continue, "
+        f"then {CHATGPT_CREATE_PLUGIN_ACTION}.\n"
+        "5. Install the resulting plugin. In a new conversation, type @ and "
+        "select it.\n"
+        "6. A loopback URL is only reachable from this machine. To reach it\n"
         "   from ChatGPT you need the Secure MCP Tunnel or a public HTTPS\n"
         "   deployment (`RECALL_MCP_MODE=remote`).\n\n"
         "## Usage policy\n\n" + _USAGE_POLICY
     )
 
 
-def _claude_markdown(settings: Any) -> str:
+def _claude_markdown(settings: ServerSettings) -> str:
     return (
         "# Recall memory — Claude Desktop\n\n"
         "Claude Desktop connects to remote MCP servers through\n"
@@ -141,7 +146,7 @@ def _claude_markdown(settings: Any) -> str:
     )
 
 
-def render(client: str, settings: Any) -> ClientTemplate:
+def render(client: str, settings: ServerSettings) -> ClientTemplate:
     """Render the template for ``client``; never touches the filesystem."""
 
     if client not in CLIENTS:
@@ -206,7 +211,7 @@ def merge(existing: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str,
     return merged
 
 
-def write_host_config(client: str, settings: Any, target: str | Path) -> WriteReport:
+def write_host_config(client: str, settings: ServerSettings, target: str | Path) -> WriteReport:
     """Back up, merge, write and read back a host configuration file."""
 
     template = render(client, settings)
@@ -271,7 +276,8 @@ def write_host_config(client: str, settings: Any, target: str | Path) -> WriteRe
 
 __all__ = [
     "CLIENTS",
-    "CHATGPT_DEVELOPER_MODE_PATH",
+    "CHATGPT_ADD_SERVER_ACTION",
+    "CHATGPT_CREATE_PLUGIN_ACTION",
     "CHATGPT_PLUGINS_URL",
     "ClientConfigError",
     "ClientTemplate",

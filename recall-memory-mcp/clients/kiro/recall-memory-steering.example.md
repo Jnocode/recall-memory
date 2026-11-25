@@ -45,8 +45,7 @@ if it is ambiguous.
 
 Call `memory_add` only when all of these hold:
 
-1. The user asked you to remember it, or stated a durable decision, preference
-   or constraint that will still matter next week.
+1. The user explicitly asked you to remember it.
 2. It is one self-contained statement, not a summary of this session.
 3. You searched first and it is not already stored.
 

@@ -349,8 +349,9 @@ def test_chatgpt_readme_matches_the_no_write_client_config_behaviour() -> None:
     assert template.writable is False
     text = _read(CHATGPT_README)
     assert "--write" in text and "refuses" in text
-    assert "Developer mode" in text
-    assert "Security and login" in text, "the developer-mode toggle lives under Security and login"
+    assert "Add custom MCP server" in text
+    assert "Create as a plugin" in text
+    assert "Security and login" not in text, "do not require a retired developer-mode UI path"
     assert "Secure MCP Tunnel" in text
     assert "/mcp" in text
 
@@ -362,19 +363,27 @@ def test_chatgpt_generated_guidance_matches_documented_host_facts() -> None:
     documented = _read(CHATGPT_README)
     for fact in (
         "no on-disk connector file",
-        cc.CHATGPT_DEVELOPER_MODE_PATH,
+        cc.CHATGPT_ADD_SERVER_ACTION,
+        cc.CHATGPT_CREATE_PLUGIN_ACTION,
         cc.CHATGPT_PLUGINS_URL,
         "Secure MCP Tunnel",
         cc.MCP_PATH,
     ):
         assert fact in generated, f"generated ChatGPT guidance omits {fact!r}"
-        if fact == cc.CHATGPT_DEVELOPER_MODE_PATH:
-            for menu_item in ("Settings", "Security and login", "Developer mode"):
-                assert menu_item in documented, (
-                    f"ChatGPT README omits developer-mode menu item {menu_item!r}"
-                )
-        else:
-            assert fact in documented, f"ChatGPT README omits {fact!r}"
+        assert fact in documented, f"ChatGPT README omits {fact!r}"
+    assert "Security and login" not in generated
+
+
+@pytest.mark.parametrize("path", (CHATGPT_INSTRUCTIONS, KIRO_STEERING), ids=lambda p: p.name)
+def test_chatgpt_and_kiro_add_policy_matches_the_server_consent_boundary(path: Path) -> None:
+    text = _read(path)
+    assert "1. The user explicitly asked you to remember it." in text
+    assert "or stated a durable" not in text
+
+
+def test_chatgpt_policy_does_not_invent_a_connector_instructions_field() -> None:
+    assert "connector's instructions field" not in _read(CHATGPT_INSTRUCTIONS)
+    assert "SERVER_INSTRUCTIONS" in _read(CHATGPT_README)
 
 
 def test_claude_readme_matches_the_no_write_client_config_behaviour() -> None:
