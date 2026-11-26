@@ -403,6 +403,14 @@ def test_kiro_readme_documents_both_config_locations_and_env_approval() -> None:
     assert cc.TOKEN_ENV_VAR in text
 
 
+def test_kiro_readme_documents_the_typed_payload_and_fail_closed_merge() -> None:
+    text = _read(KIRO_README)
+    assert "`KiroServerEntry`" in text and "`KiroPayload`" in text
+    assert "`mcpServers` must be a JSON object" in text
+    assert "before creating a backup or modifying the file" in text
+    assert "does not replace malformed data with an empty server map" in text
+
+
 def test_kiro_readme_documents_exact_local_project_scope_allowlist() -> None:
     text = _read(KIRO_README)
     assert "RECALL_MCP_MEMORY_SCOPES=global,project:recall" in text

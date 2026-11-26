@@ -22,7 +22,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypedDict
 
 from .provisioning import harden_file
 from .settings import ServerSettings
@@ -54,13 +54,28 @@ class RefusedWriteError(ClientConfigError):
     """The target is not something we are allowed to modify."""
 
 
+class KiroServerEntry(TypedDict):
+    """The remote-server fields emitted by Recall, not Kiro's entire schema."""
+
+    url: str
+    headers: dict[str, str]
+    disabled: bool
+    autoApprove: list[str]
+
+
+class KiroPayload(TypedDict):
+    """Typed generated config; existing host files may contain other keys."""
+
+    mcpServers: dict[str, KiroServerEntry]
+
+
 @dataclass(frozen=True)
 class ClientTemplate:
     client: str
     format: Literal["json", "markdown"]
     text: str
     writable: bool
-    payload: dict[str, Any] | None = None
+    payload: KiroPayload | None = None
     path_hint: str | None = None
 
 
@@ -81,7 +96,7 @@ def server_url(settings: ServerSettings) -> str:
     return f"http://{host}:{settings.port}{MCP_PATH}"
 
 
-def kiro_payload(settings: ServerSettings) -> dict[str, Any]:
+def kiro_payload(settings: ServerSettings) -> KiroPayload:
     return {
         "mcpServers": {
             SERVER_KEY: {
@@ -200,12 +215,16 @@ def _backup(path: Path) -> Path:
     return candidate
 
 
-def merge(existing: dict[str, Any] | None, payload: dict[str, Any]) -> dict[str, Any]:
-    """Replace only our own server entry; every other key is preserved."""
+def merge(existing: dict[str, Any] | None, payload: KiroPayload) -> dict[str, Any]:
+    """Preserve unrelated keys; refuse a malformed existing server namespace."""
 
     merged: dict[str, Any] = dict(existing or {})
-    servers = merged.get("mcpServers")
-    servers = dict(servers) if isinstance(servers, dict) else {}
+    servers = merged.get("mcpServers", {})
+    if not isinstance(servers, dict):
+        raise RefusedWriteError(
+            "existing mcpServers must be a JSON object; refusing to overwrite it"
+        )
+    servers = dict(servers)
     servers[SERVER_KEY] = payload["mcpServers"][SERVER_KEY]
     merged["mcpServers"] = servers
     return merged
@@ -245,11 +264,12 @@ def write_host_config(client: str, settings: ServerSettings, target: str | Path)
                 "existing host configuration root is not a JSON object; refusing to overwrite it"
             )
         existing = loaded
-        backup_path = _backup(path)
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
 
     merged = merge(existing, template.payload)
+    if not created:
+        backup_path = _backup(path)
 
     try:
         _atomic_write_json(path, merged)
@@ -281,6 +301,8 @@ __all__ = [
     "CHATGPT_PLUGINS_URL",
     "ClientConfigError",
     "ClientTemplate",
+    "KiroPayload",
+    "KiroServerEntry",
     "READ_ONLY_TOOLS",
     "RefusedWriteError",
     "SERVER_KEY",

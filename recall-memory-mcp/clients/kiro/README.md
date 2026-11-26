@@ -31,6 +31,13 @@ recall-memory-mcp client-config kiro --write ~/.kiro/settings/mcp.json
 Or copy `mcp.example.json` and edit it. `--write` only replaces the
 `recall-memory` entry; every other server in your file is preserved.
 
+The existing root must be a JSON object, and an existing `mcpServers` must be a JSON object
+too. A missing `mcpServers` key or an empty object is supported. A null, boolean,
+number, array or string is refused before creating a backup or modifying the file;
+Recall does not replace malformed data with an empty server map. Correct the
+configuration explicitly before retrying. This checks the merge boundary, not
+every vendor-specific option in unrelated server entries.
+
 ### CLI output versus the checked-in example
 
 `client-config kiro` renders the server's active endpoint as one
@@ -46,6 +53,13 @@ their normal spelling; an IPv6 loopback host is bracketed, for example
 `http://[::1]:8765/mcp`. In remote mode the configured public HTTPS URL takes
 precedence. Valid generated JSON proves the template contract, not a live
 Kiro connection or cross-client memory read-back.
+
+The generated Python contract uses `KiroServerEntry` and `KiroPayload`
+`TypedDict` types: `url` is a string, `headers` maps strings to strings,
+`disabled` is a boolean and `autoApprove` is a list of tool-name strings.
+These types describe only Recall's emitted fields, not the whole Kiro schema;
+type hints do not validate a host file at runtime. Existing unrelated JSON keys
+remain supported and the merge boundary is checked separately as described above.
 
 ## The example file
 

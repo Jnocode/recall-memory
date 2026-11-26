@@ -76,6 +76,23 @@ def test_kiro_template_is_valid_json_with_the_server_url(isolated_env) -> None:
     assert entry["disabled"] is False
 
 
+def test_generated_kiro_payload_declares_the_documented_field_types() -> None:
+    from typing import get_type_hints
+
+    assert get_type_hints(client_configs.KiroServerEntry) == {
+        "url": str,
+        "headers": dict[str, str],
+        "disabled": bool,
+        "autoApprove": list[str],
+    }
+    assert get_type_hints(client_configs.KiroPayload) == {
+        "mcpServers": dict[str, client_configs.KiroServerEntry],
+    }
+    assert get_type_hints(client_configs.ClientTemplate)["payload"] == (
+        client_configs.KiroPayload | None
+    )
+
+
 def test_kiro_template_uses_an_environment_placeholder_for_credentials(isolated_env) -> None:
     payload = json.loads(run(["client-config", "kiro"], isolated_env)[1])
     entry = payload["mcpServers"][client_configs.SERVER_KEY]
@@ -249,6 +266,58 @@ def test_write_refuses_a_target_whose_root_is_not_an_object(tmp_path: Path, isol
     assert code == cli.EXIT_REFUSED
     assert target.read_text(encoding="utf-8") == "[1, 2, 3]"
     assert err.strip()
+
+
+@pytest.mark.parametrize("servers", [None, False, 0, [], ["other-server"], "other-server"])
+def test_write_refuses_a_non_object_server_namespace_without_touching_the_file(
+    servers, tmp_path: Path, isolated_env,
+) -> None:
+    target = tmp_path / "mcp.json"
+    original = json.dumps({"telemetry": False, "mcpServers": servers}, indent=2).encode()
+    target.write_bytes(original)
+
+    code, _out, err = run(["client-config", "kiro", "--write", str(target)], isolated_env)
+
+    assert code == cli.EXIT_REFUSED
+    assert "mcpServers" in err and "JSON object" in err
+    assert target.read_bytes() == original
+    assert list(tmp_path.glob("mcp.json.bak-*")) == []
+    assert not target.with_name("mcp.json.tmp-recall").exists()
+
+
+@pytest.mark.parametrize("servers", [None, False, 0, [], ["other-server"], "other-server"])
+def test_merge_refuses_a_non_object_server_namespace_without_mutating_input(
+    servers, isolated_env,
+) -> None:
+    existing = {"telemetry": False, "mcpServers": servers}
+    original = json.dumps(existing, sort_keys=True)
+    payload = client_configs.kiro_payload(cli.resolve_settings(isolated_env))
+
+    with pytest.raises(client_configs.RefusedWriteError, match="mcpServers.*JSON object"):
+        client_configs.merge(existing, payload)
+
+    assert json.dumps(existing, sort_keys=True) == original
+
+
+@pytest.mark.parametrize("existing", [{}, {"telemetry": False}, {"mcpServers": {}}])
+def test_write_accepts_a_missing_or_empty_server_namespace(
+    existing, tmp_path: Path, isolated_env,
+) -> None:
+    target = tmp_path / "mcp.json"
+    original = json.dumps(existing).encode()
+    target.write_bytes(original)
+
+    code, _out, err = run(["client-config", "kiro", "--write", str(target)], isolated_env)
+
+    assert code == cli.EXIT_OK, err
+    written = json.loads(target.read_bytes())
+    assert client_configs.SERVER_KEY in written["mcpServers"]
+    assert {key: value for key, value in written.items() if key != "mcpServers"} == {
+        key: value for key, value in existing.items() if key != "mcpServers"
+    }
+    backups = list(tmp_path.glob("mcp.json.bak-*"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
 
 
 def test_write_refuses_a_symlinked_target(tmp_path: Path, isolated_env) -> None:
