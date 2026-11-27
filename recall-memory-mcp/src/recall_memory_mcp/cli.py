@@ -3,6 +3,10 @@
     recall-memory-mcp init            create the local config + authority DB
     recall-memory-mcp doctor          diagnose this installation (redacted)
     recall-memory-mcp client-config   print (or --write) a host configuration
+    recall-memory-mcp serve           run the stateful Streamable HTTP server
+    recall-memory-mcp db ...          offline whole-database break-glass
+    recall-memory-mcp service ...     install / status / uninstall the OS unit
+    recall-memory-mcp memory ...      owner-scoped online memory admin
 
 Design rules that the tests pin down:
 
@@ -16,10 +20,8 @@ Design rules that the tests pin down:
   know what is about to be created — but never in diagnostics.
 * ``client-config`` prints a template by default; ``--write`` is the only way
   to touch a host file and always backs up + reads back first (R9.5).
-
-``serve`` is deliberately absent until the authority wiring it needs
-(concrete repository/embedder adapter + request-scoped context provider)
-exists; shipping a console command that cannot serve would be a lie.
+* ``serve`` refuses to open a transport unless the authority database is
+  ready, then takes the single-owner lock before binding (task 6.9).
 """
 
 from __future__ import annotations

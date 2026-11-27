@@ -595,6 +595,25 @@ def test_serve_passes_explicit_memory_scopes_to_authority(
     assert captured["memory_scopes"] == ("global", "project:recall-ide-e2e")
 
 
+def test_package_readme_documents_every_registered_top_level_command() -> None:
+    """The package README is the PyPI landing page; a stale command list is a defect.
+
+    Read the registry from the parser instead of keeping a second hand-written
+    list in the test, so a new command cannot ship undocumented.
+    """
+
+    import argparse
+
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    parser = cli.build_parser()
+    registries = [
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+    ]
+    assert len(registries) == 1, "expected exactly one top-level subcommand registry"
+    missing = sorted(name for name in registries[0].choices if f"`{name}`" not in readme)
+    assert not missing, f"README.md omits top-level commands: {missing}"
+
+
 def test_every_test_in_this_module_is_top_level() -> None:
     """Guard against the nesting accident that hid the `serve` tests.
 

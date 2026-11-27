@@ -1,13 +1,13 @@
 # recall-memory-mcp
 
-Cross-client shared memory for ChatGPT Desktop, Claude Desktop and Kiro over the
-Model Context Protocol, backed by a single local SQLite authority.
+Cross-client shared memory for ChatGPT, Claude and Kiro over the Model Context
+Protocol, backed by a single local SQLite authority.
 
-> **Status: pre-release, in active implementation.**
-> Only the pieces listed below exist today. Nothing here should be read as a
-> claim that installing this package makes every conversation sync
-> automatically — installing an MCP server only means the host *can see* the
-> tools. Whether a model calls them is decided by each host.
+> **Status: pre-release.**
+> Nothing here should be read as a claim that installing this package makes
+> every conversation sync automatically — installing an MCP server only means
+> the host *can see* the tools. Whether a model calls them is decided by each
+> host.
 
 ## What exists today
 
@@ -18,9 +18,26 @@ Model Context Protocol, backed by a single local SQLite authority.
 | Log/error redaction | `redaction.py` | implemented + tested |
 | Repository/embedder protocols | `repository.py` | implemented |
 | Transport-free service | `service.py` | implemented + tested |
-| MCP SDK v2 server / HTTP app | `server.py`, `app.py` | **not yet implemented** |
-| OAuth resource server | `auth.py` | **not yet implemented** |
-| CLI (`init`/`serve`/`doctor`) | `cli.py` | **not yet implemented** |
+| MCP SDK v2 server, seven tools | `server.py` | implemented + tested |
+| Streamable HTTP app (`/mcp`, `/health`) | `app.py` | implemented + tested |
+| Bearer-token validation, scopes, revocation, grants | `auth.py`, `grants.py` | implemented + tested |
+| Owner-scoped online admin and offline break-glass | `admin.py`, `adminapi.py`, `admincli.py`, `breakglass.py` | implemented + tested |
+| Single-owner service lifecycle | `servicectl.py` | implemented + tested |
+| CLI (`init`, `doctor`, `client-config`, `serve`, `db`, `service`, `memory`) | `cli.py` | implemented + tested |
+| Host templates (ChatGPT / Claude / Kiro) | `client_configs.py`, `clients/` | implemented + tested |
+
+## Cross-client setup
+
+- **Kiro** is the only host here with an on-disk `mcpServers` file.
+  `recall-memory-mcp client-config kiro --write <path>` installs it with a
+  byte-for-byte backup and a JSON read-back. See `clients/kiro/README.md`.
+- **ChatGPT** and **Claude** are configured through their own connector UI.
+  `client-config chatgpt` and `client-config claude` print guidance and refuse
+  `--write` instead of inventing a file format.
+
+For a public endpoint, run remote mode with authentication configured; a
+loopback URL is reachable only from this machine. Verify the endpoint with MCP
+Inspector before blaming the host.
 
 ## Design invariants
 
